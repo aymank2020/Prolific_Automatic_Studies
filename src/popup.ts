@@ -145,17 +145,19 @@ async function setupForceCheck(): Promise<void> {
 
 async function setupAISettings(): Promise<void> {
     const aiEnabled = document.getElementById("aiEnabled") as HTMLInputElement;
+    const aiShadowMode = document.getElementById("aiShadowMode") as HTMLInputElement;
     const aiSettingsGroup = document.getElementById("aiSettingsGroup") as HTMLDivElement;
     const aiApiKey = document.getElementById("aiApiKey") as HTMLInputElement;
     const aiBaseUrl = document.getElementById("aiBaseUrl") as HTMLInputElement;
     const aiModel = document.getElementById("aiModel") as HTMLSelectElement;
 
-    if (!aiEnabled || !aiSettingsGroup || !aiApiKey || !aiBaseUrl || !aiModel) return;
+    if (!aiEnabled || !aiShadowMode || !aiSettingsGroup || !aiApiKey || !aiBaseUrl || !aiModel) return;
 
     // Load saved settings
-    const result = await chrome.storage.sync.get(["aiEnabled", "aiApiKey", "aiBaseUrl", "aiModel"]);
+    const result = await chrome.storage.sync.get(["aiEnabled", "aiShadowMode", "aiApiKey", "aiBaseUrl", "aiModel"]);
     
     aiEnabled.checked = result["aiEnabled"] === true;
+    aiShadowMode.checked = result["aiShadowMode"] === true;
     aiSettingsGroup.style.display = aiEnabled.checked ? "block" : "none";
     
     if (result["aiApiKey"]) aiApiKey.value = result["aiApiKey"];
@@ -166,6 +168,10 @@ async function setupAISettings(): Promise<void> {
     aiEnabled.addEventListener("change", async () => {
         await chrome.storage.sync.set({ ["aiEnabled"]: aiEnabled.checked });
         aiSettingsGroup.style.display = aiEnabled.checked ? "block" : "none";
+    });
+
+    aiShadowMode.addEventListener("change", async () => {
+        await chrome.storage.sync.set({ ["aiShadowMode"]: aiShadowMode.checked });
     });
 
     aiApiKey.addEventListener("input", async () => {

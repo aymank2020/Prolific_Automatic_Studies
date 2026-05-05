@@ -168,15 +168,17 @@ function setupForceCheck() {
 function setupAISettings() {
     return __awaiter(this, void 0, void 0, function* () {
         const aiEnabled = document.getElementById("aiEnabled");
+        const aiShadowMode = document.getElementById("aiShadowMode");
         const aiSettingsGroup = document.getElementById("aiSettingsGroup");
         const aiApiKey = document.getElementById("aiApiKey");
         const aiBaseUrl = document.getElementById("aiBaseUrl");
         const aiModel = document.getElementById("aiModel");
-        if (!aiEnabled || !aiSettingsGroup || !aiApiKey || !aiBaseUrl || !aiModel)
+        if (!aiEnabled || !aiShadowMode || !aiSettingsGroup || !aiApiKey || !aiBaseUrl || !aiModel)
             return;
         // Load saved settings
-        const result = yield chrome.storage.sync.get(["aiEnabled", "aiApiKey", "aiBaseUrl", "aiModel"]);
+        const result = yield chrome.storage.sync.get(["aiEnabled", "aiShadowMode", "aiApiKey", "aiBaseUrl", "aiModel"]);
         aiEnabled.checked = result["aiEnabled"] === true;
+        aiShadowMode.checked = result["aiShadowMode"] === true;
         aiSettingsGroup.style.display = aiEnabled.checked ? "block" : "none";
         if (result["aiApiKey"])
             aiApiKey.value = result["aiApiKey"];
@@ -187,6 +189,9 @@ function setupAISettings() {
         aiEnabled.addEventListener("change", () => __awaiter(this, void 0, void 0, function* () {
             yield chrome.storage.sync.set({ ["aiEnabled"]: aiEnabled.checked });
             aiSettingsGroup.style.display = aiEnabled.checked ? "block" : "none";
+        }));
+        aiShadowMode.addEventListener("change", () => __awaiter(this, void 0, void 0, function* () {
+            yield chrome.storage.sync.set({ ["aiShadowMode"]: aiShadowMode.checked });
         }));
         aiApiKey.addEventListener("input", () => __awaiter(this, void 0, void 0, function* () {
             yield chrome.storage.sync.set({ ["aiApiKey"]: aiApiKey.value });

@@ -22,9 +22,11 @@ let shouldSendNotification: boolean;
 let shouldPlayAudio: boolean;
 let previousTitle: string;
 let aiEnabledCached = false;
+let aiShadowModeCached = false;
 
 async function hydrateCachedSettings(): Promise<void> {
     aiEnabledCached = await getValueFromStorage('aiEnabled', false);
+    aiShadowModeCached = await getValueFromStorage('aiShadowMode', false);
 }
 
 // ======================== API POLLING (Background) ========================
@@ -103,8 +105,13 @@ function getNumberFromTitle(title: string): number {
 }
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'sync' && changes.aiEnabled) {
-        aiEnabledCached = changes.aiEnabled.newValue === true;
+    if (areaName === 'sync') {
+        if (changes.aiEnabled) {
+            aiEnabledCached = changes.aiEnabled.newValue === true;
+        }
+        if (changes.aiShadowMode) {
+            aiShadowModeCached = changes.aiShadowMode.newValue === true;
+        }
     }
 });
 
@@ -204,7 +211,7 @@ async function handleMessages(message: { target: string; type: any; data?: any; 
         case 'solve-question':
             try {
                 const answer = await queryAI(message.data.userPrompt, message.data.systemPrompt);
-                sendResponse(answer);
+                sendResponse({ answer, shadowMode: aiShadowModeCached });
             } catch (error) {
                 console.error('[Background] AI Solve Error:', error);
                 sendResponse(null);
@@ -495,29 +502,41 @@ async function queryAI(userPrompt: string, systemPrompt: string): Promise<string
 
     const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
 
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-            model: model,
-            messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userPrompt }
-            ],
-            temperature: 0.1
-        })
-    });
+    // 15-second timeout for AI requests
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-    if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(`AI API Error: ${errorData.error?.message || response.statusText}`);
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: model,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt }
+                ],
+                temperature: 0.1
+            }),
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(`AI API Error: ${errorData.error?.message || response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data.choices[0].message.content.trim();
+    } catch (error) {
+        clearTimeout(timeoutId);
+        throw error;
     }
-
-    const data = await response.json();
-    return data.choices[0].message.content.trim();
 }
 
 // End of Background Script

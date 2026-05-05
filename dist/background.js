@@ -30,9 +30,11 @@ let shouldSendNotification;
 let shouldPlayAudio;
 let previousTitle;
 let aiEnabledCached = false;
+let aiShadowModeCached = false;
 function hydrateCachedSettings() {
     return __awaiter(this, void 0, void 0, function* () {
         aiEnabledCached = yield getValueFromStorage('aiEnabled', false);
+        aiShadowModeCached = yield getValueFromStorage('aiShadowMode', false);
     });
 }
 // ======================== API POLLING (Background) ========================
@@ -103,8 +105,13 @@ function getNumberFromTitle(title) {
     return match ? parseInt(match[1]) : 0;
 }
 chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'sync' && changes.aiEnabled) {
-        aiEnabledCached = changes.aiEnabled.newValue === true;
+    if (areaName === 'sync') {
+        if (changes.aiEnabled) {
+            aiEnabledCached = changes.aiEnabled.newValue === true;
+        }
+        if (changes.aiShadowMode) {
+            aiShadowModeCached = changes.aiShadowMode.newValue === true;
+        }
     }
 });
 // ======================== MESSAGE HANDLER ========================
@@ -193,7 +200,7 @@ function handleMessages(message, sender, sendResponse) {
             case 'solve-question':
                 try {
                     const answer = yield queryAI(message.data.userPrompt, message.data.systemPrompt);
-                    sendResponse(answer);
+                    sendResponse({ answer, shadowMode: aiShadowModeCached });
                 }
                 catch (error) {
                     console.error('[Background] AI Solve Error:', error);
@@ -487,27 +494,38 @@ function queryAI(userPrompt, systemPrompt) {
         if (!apiKey)
             return 'NO_API_KEY';
         const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
-        const response = yield fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-                model: model,
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: userPrompt }
-                ],
-                temperature: 0.1
-            })
-        });
-        if (!response.ok) {
-            const errorData = yield response.json();
-            throw new Error(`AI API Error: ${((_a = errorData.error) === null || _a === void 0 ? void 0 : _a.message) || response.statusText}`);
+        // 15-second timeout for AI requests
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        try {
+            const response = yield fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    model: model,
+                    messages: [
+                        { role: "system", content: systemPrompt },
+                        { role: "user", content: userPrompt }
+                    ],
+                    temperature: 0.1
+                }),
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            if (!response.ok) {
+                const errorData = yield response.json();
+                throw new Error(`AI API Error: ${((_a = errorData.error) === null || _a === void 0 ? void 0 : _a.message) || response.statusText}`);
+            }
+            const data = yield response.json();
+            return data.choices[0].message.content.trim();
         }
-        const data = yield response.json();
-        return data.choices[0].message.content.trim();
+        catch (error) {
+            clearTimeout(timeoutId);
+            throw error;
+        }
     });
 }
 // End of Background Script

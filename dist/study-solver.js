@@ -1,6 +1,6 @@
 "use strict";
 /**
- * Prolific Study Solver - AI-Assisted Survey Answering
+ * Prolific Study Solver - AI-Assisted Survey Answering (Final Refined Version)
  */
 // @ts-ignore: Isolated scope
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
@@ -19,48 +19,94 @@ const SOLVER_CONFIG = {
     ANSWER_DELAY_MAX: 5000,
     NEXT_DELAY_MIN: 1000,
     NEXT_DELAY_MAX: 3000,
+    TYPING_SPEED: 50, // ms per character
 };
 let isSolving = false;
 let solvedQuestions = new Set();
 let solverObserver = null;
+let statusIndicator = null;
 function solverLog(...args) { console.log(SOLVER_CONFIG.LOG_PREFIX, ...args); }
+// ======================== UI INDICATOR ========================
+function updateStatusUI(state, text) {
+    if (!statusIndicator) {
+        statusIndicator = document.createElement('div');
+        statusIndicator.id = 'prolific-ai-status';
+        Object.assign(statusIndicator.style, {
+            position: 'fixed',
+            bottom: '20px',
+            left: '20px',
+            padding: '8px 12px',
+            borderRadius: '20px',
+            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            zIndex: '999999',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            fontSize: '12px',
+            fontWeight: '600',
+            fontFamily: 'Inter, sans-serif',
+            transition: 'all 0.3s ease',
+            border: '1px solid #eee'
+        });
+        document.body.appendChild(statusIndicator);
+    }
+    const icons = {
+        idle: '⏳',
+        thinking: '🤖',
+        done: '✅',
+        error: '⚠️'
+    };
+    const colors = {
+        idle: '#6b7280',
+        thinking: '#8b5cf6',
+        done: '#10b981',
+        error: '#ef4444'
+    };
+    statusIndicator.style.color = colors[state];
+    statusIndicator.style.borderColor = colors[state];
+    statusIndicator.innerHTML = `<span>${icons[state]}</span> <span>${text || state.toUpperCase()}</span>`;
+    if (state === 'thinking') {
+        statusIndicator.style.transform = 'scale(1.05)';
+    }
+    else {
+        statusIndicator.style.transform = 'scale(1)';
+    }
+}
+// ======================== EXTRACTION ========================
 function getQuestionId() {
     var _a, _b;
-    // Generate a semi-unique ID for the current question view
     return window.location.href + '#' + (((_b = (_a = document.querySelector('.QuestionText, .question-text, legend')) === null || _a === void 0 ? void 0 : _a.textContent) === null || _b === void 0 ? void 0 : _b.substring(0, 50)) || Date.now());
 }
 function extractQuestionAndOptions() {
     var _a;
-    // Robust extraction to prevent mixing question and options
     const questionEl = document.querySelector('fieldset > legend, .QuestionText, .question-text, .q-text, h1, h2');
     if (!questionEl)
         return null;
     const question = ((_a = questionEl.textContent) === null || _a === void 0 ? void 0 : _a.trim()) || '';
     if (!question || question.length < 5)
         return null;
+    // Check for choice inputs (radio/checkbox)
     const options = [];
-    // Target inputs to find their associated labels
-    const inputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');
-    inputs.forEach(input => {
+    const choiceInputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+    choiceInputs.forEach(input => {
         var _a;
         const label = input.closest('label') || input.parentElement;
         const text = (_a = label === null || label === void 0 ? void 0 : label.textContent) === null || _a === void 0 ? void 0 : _a.trim();
-        if (text && text.length > 0) {
+        if (text && text.length > 0)
             options.push(text);
-        }
     });
-    // If no radio/checkbox found, check for button-style choices (Gorilla/Typeform)
-    if (options.length === 0) {
-        const buttons = document.querySelectorAll('button.choice, .ChoiceStructure label, .choice-label');
-        buttons.forEach(btn => {
-            var _a;
-            const text = (_a = btn.textContent) === null || _a === void 0 ? void 0 : _a.trim();
-            if (text)
-                options.push(text);
-        });
+    if (options.length >= 2) {
+        return { question, options, type: 'choice' };
     }
-    return options.length >= 2 ? { question, options } : null;
+    // Check for text inputs (Textarea or Text input)
+    const textInput = document.querySelector('textarea, input[type="text"]');
+    if (textInput && textInput.offsetParent !== null) {
+        return { question, options: [], type: 'text' };
+    }
+    return null;
 }
+// ======================== SOLVING ========================
 function solveCurrentQuestion() {
     return __awaiter(this, void 0, void 0, function* () {
         if (isSolving)
@@ -69,120 +115,140 @@ function solveCurrentQuestion() {
         if (solvedQuestions.has(qId))
             return;
         const extracted = extractQuestionAndOptions();
-        if (!extracted || extracted.options.length === 0)
+        if (!extracted)
             return;
         isSolving = true;
-        solverLog('🧐 Question detected:', extracted.question);
-        solverLog('📋 Options:', extracted.options.join(' | '));
-        const systemPrompt = `You are a helpful assistant answering a survey. 
+        updateStatusUI('thinking', 'AI Thinking...');
+        const systemPrompt = extracted.type === 'choice'
+            ? `You are a helpful assistant answering a survey. 
 CRITICAL RULES:
 1. If the question asks you to select a specific option to prove you are paying attention (e.g., "Select 'Sometimes'", "Choose 'Apple'"), YOU MUST follow that instruction exactly.
-2. If there are no attention traps, answer logically and honestly based on the provided context.
-3. Return ONLY the exact text of the correct option from the provided list, nothing else.`;
-        const userPrompt = `Question: ${extracted.question}\nOptions:\n${extracted.options.map((o, i) => `${i + 1}. ${o}`).join('\n')}`;
+2. If there are no attention traps, answer logically and honestly.
+3. Return ONLY the exact text of the correct option from the provided list, nothing else.`
+            : `You are a helpful assistant answering a survey. 
+CRITICAL RULES:
+1. If the question asks you to type a specific word or phrase to prove you are paying attention (e.g., "Type the word 'Blue'", "Write 'I am human'"), YOU MUST write that exactly.
+2. If it's a general question, answer logically and concisely (1-2 sentences).
+3. Return ONLY the answer text.`;
+        const userPrompt = extracted.type === 'choice'
+            ? `Question: ${extracted.question}\nOptions:\n${extracted.options.map((o, i) => `${i + 1}. ${o}`).join('\n')}`
+            : `Question: ${extracted.question}\nThis is an open-ended text question. Please provide the appropriate answer.`;
         try {
-            const aiAnswer = yield chrome.runtime.sendMessage({
+            const response = yield chrome.runtime.sendMessage({
                 target: 'background',
                 type: 'solve-question',
                 data: { systemPrompt, userPrompt }
             });
-            if (aiAnswer && aiAnswer !== 'NO_API_KEY') {
-                solverLog('🎯 AI Answer:', aiAnswer);
-                const success = yield injectAnswer(aiAnswer, extracted.options);
+            if (response && response.answer && response.answer !== 'NO_API_KEY') {
+                solverLog('🎯 AI Answer:', response.answer);
+                if (response.shadowMode) {
+                    solverLog('👤 [Shadow Mode] Skipping click. Planned answer:', response.answer);
+                    updateStatusUI('done', 'SHADOW MODE: ' + response.answer);
+                    solvedQuestions.add(qId);
+                    isSolving = false;
+                    return;
+                }
+                const success = yield injectAnswer(response.answer, extracted.type);
                 if (success) {
+                    updateStatusUI('done', 'Solved!');
                     solvedQuestions.add(qId);
                 }
                 else {
+                    updateStatusUI('error', 'Could not inject');
                     isSolving = false;
                 }
             }
             else {
-                if (aiAnswer === 'NO_API_KEY')
-                    solverLog('⚠️ API Key missing.');
+                updateStatusUI('error', (response === null || response === void 0 ? void 0 : response.answer) === 'NO_API_KEY' ? 'API Key Missing' : 'API Error');
                 isSolving = false;
             }
         }
         catch (e) {
-            solverLog('❌ Communication error:', e);
+            solverLog('❌ Error:', e);
+            updateStatusUI('error', 'Network Error');
             isSolving = false;
         }
     });
 }
-function injectAnswer(aiAnswer, options) {
+function injectAnswer(aiAnswer, type) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b;
-        const answerLower = aiAnswer.toLowerCase().trim();
-        let targetInput = null;
-        // Search for inputs first
-        const inputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');
-        for (const input of Array.from(inputs)) {
-            const label = input.closest('label') || input.parentElement;
-            const labelText = ((_a = label === null || label === void 0 ? void 0 : label.textContent) === null || _a === void 0 ? void 0 : _a.trim().toLowerCase()) || '';
-            if (labelText === answerLower || labelText.includes(answerLower)) {
-                targetInput = input;
-                break;
-            }
-        }
-        // Fallback to buttons/labels
-        if (!targetInput) {
-            const interactables = document.querySelectorAll('label, button, .choice-label');
-            for (const el of Array.from(interactables)) {
-                const text = ((_b = el.textContent) === null || _b === void 0 ? void 0 : _b.trim().toLowerCase()) || '';
-                if (text === answerLower || text.includes(answerLower)) {
-                    targetInput = el;
-                    break;
-                }
-            }
-        }
-        if (targetInput) {
-            const answerDelay = SOLVER_CONFIG.ANSWER_DELAY_MIN + Math.random() * (SOLVER_CONFIG.ANSWER_DELAY_MAX - SOLVER_CONFIG.ANSWER_DELAY_MIN);
-            solverLog(`⏳ Waiting ${Math.round(answerDelay)}ms (Human Delay)...`);
-            return new Promise((resolve) => {
-                setTimeout(() => {
-                    targetInput === null || targetInput === void 0 ? void 0 : targetInput.click();
-                    solverLog('🖱️ Answer clicked.');
-                    const nextDelay = SOLVER_CONFIG.NEXT_DELAY_MIN + Math.random() * (SOLVER_CONFIG.NEXT_DELAY_MAX - SOLVER_CONFIG.NEXT_DELAY_MIN);
+        const answerDelay = SOLVER_CONFIG.ANSWER_DELAY_MIN + Math.random() * (SOLVER_CONFIG.ANSWER_DELAY_MAX - SOLVER_CONFIG.ANSWER_DELAY_MIN);
+        if (type === 'choice') {
+            const targetInput = findChoiceElement(aiAnswer);
+            if (targetInput) {
+                return new Promise((resolve) => {
                     setTimeout(() => {
-                        clickNextButton();
-                        resolve(true);
-                    }, nextDelay);
-                }, answerDelay);
-            });
+                        targetInput.click();
+                        const nextDelay = SOLVER_CONFIG.NEXT_DELAY_MIN + Math.random() * (SOLVER_CONFIG.NEXT_DELAY_MAX - SOLVER_CONFIG.NEXT_DELAY_MIN);
+                        setTimeout(() => { clickNextButton(); resolve(true); }, nextDelay);
+                    }, answerDelay);
+                });
+            }
         }
         else {
-            solverLog('❌ Matching element not found.');
-            return false;
+            const textInput = document.querySelector('textarea, input[type="text"]');
+            if (textInput) {
+                return new Promise((resolve) => {
+                    setTimeout(() => __awaiter(this, void 0, void 0, function* () {
+                        yield simulateTyping(textInput, aiAnswer);
+                        const nextDelay = SOLVER_CONFIG.NEXT_DELAY_MIN + Math.random() * (SOLVER_CONFIG.NEXT_DELAY_MAX - SOLVER_CONFIG.NEXT_DELAY_MIN);
+                        setTimeout(() => { clickNextButton(); resolve(true); }, nextDelay);
+                    }), answerDelay);
+                });
+            }
         }
+        return false;
+    });
+}
+function findChoiceElement(aiAnswer) {
+    var _a, _b;
+    const answerLower = aiAnswer.toLowerCase().trim();
+    const inputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+    for (const input of Array.from(inputs)) {
+        const label = input.closest('label') || input.parentElement;
+        const text = ((_a = label === null || label === void 0 ? void 0 : label.textContent) === null || _a === void 0 ? void 0 : _a.trim().toLowerCase()) || '';
+        if (text === answerLower || text.includes(answerLower))
+            return input;
+    }
+    const buttons = document.querySelectorAll('button, label, .choice-label');
+    for (const btn of Array.from(buttons)) {
+        const text = ((_b = btn.textContent) === null || _b === void 0 ? void 0 : _b.trim().toLowerCase()) || '';
+        if (text === answerLower || text.includes(answerLower))
+            return btn;
+    }
+    return null;
+}
+function simulateTyping(el, text) {
+    return __awaiter(this, void 0, void 0, function* () {
+        el.focus();
+        el.value = '';
+        for (const char of text) {
+            el.value += char;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            yield new Promise(r => setTimeout(r, SOLVER_CONFIG.TYPING_SPEED + Math.random() * 20));
+        }
+        el.blur();
     });
 }
 function clickNextButton() {
-    // Uses only valid CSS selectors as noted in review
     const nextButton = document.querySelector('#NextButton, input[type="submit"], button[name="Next"], button.NextButton, .next-button');
     if (nextButton && nextButton.offsetParent !== null) {
         nextButton.click();
-        solverLog('➡️ Next clicked.');
     }
-    // Release lock after a short buffer
     setTimeout(() => { isSolving = false; }, 2000);
 }
 function setupSolverObserver() {
     if (solverObserver)
         solverObserver.disconnect();
-    let debounce = null;
     solverObserver = new MutationObserver(() => {
-        if (debounce)
-            clearTimeout(debounce);
-        debounce = setTimeout(() => {
-            solveCurrentQuestion();
-        }, SOLVER_CONFIG.DEBOUNCE_TIME);
+        setTimeout(solveCurrentQuestion, SOLVER_CONFIG.DEBOUNCE_TIME);
     });
     solverObserver.observe(document.body, { childList: true, subtree: true });
-    solverLog('👁️ MutationObserver active.');
 }
-// Start Solver
+// Start
 if (window.location.href.includes('PROLIFIC_PID=')) {
-    solverLog('🚀 Study page detected. Ready.');
-    // Initial delay for page load
+    updateStatusUI('idle', 'Ready');
     setTimeout(() => {
         solveCurrentQuestion();
         setupSolverObserver();
