@@ -94,7 +94,7 @@
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/spin311/ProlificAutomaticStudies.git
+   git clone https://github.com/aymank2020/Prolific_Automatic_Studies.git
    cd ProlificAutomaticStudies
    ```
 
@@ -236,4 +236,4 @@ Contributions are welcome! Feel free to open issues or submit pull requests.
 
 ## 📬 Contact
 
-For questions or suggestions: [spin311pro@gmail.com](mailto:spin311pro@gmail.com)
+For questions or suggestions, open an issue on [GitHub](https://github.com/aymank2020/Prolific_Automatic_Studies).

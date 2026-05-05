@@ -47,7 +47,7 @@ chrome.runtime.onInstalled.addListener(async (details: { reason: string; }): Pro
     if(details.reason === "install"){
         await setInitialValues();
         await new Promise(resolve => setTimeout(resolve, 1000));
-        await chrome.tabs.create({url: "https://spin311.github.io/ProlificAutomaticStudies/", active: true});
+        await chrome.tabs.create({url: "https://github.com/aymank2020/Prolific_Automatic_Studies", active: true});
     }
     // Set up alarms for periodic checking
     setupAlarms();

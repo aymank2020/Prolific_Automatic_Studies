@@ -50,7 +50,7 @@ chrome.runtime.onInstalled.addListener((details) => __awaiter(void 0, void 0, vo
     if (details.reason === "install") {
         yield setInitialValues();
         yield new Promise(resolve => setTimeout(resolve, 1000));
-        yield chrome.tabs.create({ url: "https://spin311.github.io/ProlificAutomaticStudies/", active: true });
+        yield chrome.tabs.create({ url: "https://github.com/aymank2020/Prolific_Automatic_Studies", active: true });
     }
     // Set up alarms for periodic checking
     setupAlarms();

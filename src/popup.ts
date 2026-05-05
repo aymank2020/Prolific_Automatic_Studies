@@ -1,145 +1,43 @@
-async function setVolume(volume: HTMLInputElement) {
+/**
+ * Prolific Auto-Reserve Popup Script
+ * Handles: Tab switching, all original settings, auto-reserve controls, live status
+ */
+
+// ======================== TAB SWITCHING ========================
+function setupTabs(): void {
+    const tabs = document.querySelectorAll('.tab');
+    const contents = document.querySelectorAll('.tab-content');
+
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const target = (tab as HTMLElement).dataset.tab;
+            tabs.forEach(t => t.classList.remove('active'));
+            contents.forEach(c => c.classList.remove('active'));
+            tab.classList.add('active');
+            const targetEl = document.getElementById(`tab-${target}`);
+            if (targetEl) targetEl.classList.add('active');
+        });
+    });
+}
+
+// ======================== ORIGINAL SETTINGS (preserved) ========================
+
+async function setVolume(volume: HTMLInputElement): Promise<void> {
     const result = await chrome.storage.sync.get("volume");
     const vol = result["volume"];
     if (vol !== undefined) {
-        volume.value =  String(vol);
+        volume.value = String(vol);
     }
-    volume.addEventListener("change", async function () {
-        await chrome.storage.sync.set({["volume"]: parseFloat(volume.value)});
+    updateVolumeDisplay(volume.value);
+    volume.addEventListener("input", async function () {
+        await chrome.storage.sync.set({ ["volume"]: parseFloat(volume.value) });
+        updateVolumeDisplay(volume.value);
     });
-
 }
 
-document.addEventListener('DOMContentLoaded', async function () {
-    await chrome.runtime.sendMessage({
-        type: 'clear-badge',
-        target: 'background',
-    });
-
-    const autoAudio = document.getElementById("autoAudio") as HTMLInputElement;
-    const selectAudio = document.getElementById("selectAudio") as HTMLSelectElement;
-    const counter = document.getElementById("counter") as HTMLSpanElement;
-    const playAudio = document.getElementById("playAudio") as HTMLButtonElement;
-    const showNotification = document.getElementById("showNotification") as HTMLInputElement;
-    const volume = document.getElementById("volume") as HTMLInputElement;
-    const openProlific = document.getElementById("openProlific") as HTMLInputElement;
-    const donateText: HTMLElement | null = document.getElementById('donateText');
-    const donateImg: HTMLElement | null = document.getElementById('donateImg');
-
-    // New auto-reserve controls
-    const autoReserve = document.getElementById("autoReserve") as HTMLInputElement;
-    const forceCheck = document.getElementById("forceCheck") as HTMLButtonElement;
-    const statusText = document.getElementById("statusText") as HTMLSpanElement;
-    const reservedCount = document.getElementById("reservedCount") as HTMLSpanElement;
-
-    if (donateImg && donateText) {
-        donateText.addEventListener('mouseover', function() {
-            donateImg.style.visibility = 'visible';
-        });
-    }
-
-    if (autoAudio) {
-        await setAudioCheckbox(autoAudio);
-    }
-
-    if(selectAudio) {
-        await setAudioOption(selectAudio);
-    }
-
-    if(counter) {
-        await setCounter(counter);
-    }
-
-    if(playAudio) {
-        playAudio.addEventListener("click", playAlert);
-    }
-
-    if(showNotification) {
-        await setShowNotification(showNotification);
-    }
-
-    if(openProlific) {
-        await setOpenProlific(openProlific);
-    }
-
-    if (volume) {
-        await setVolume(volume);
-    }
-
-    // Setup auto-reserve toggle
-    if (autoReserve) {
-        await setAutoReserve(autoReserve);
-    }
-
-    // Setup force check button
-    if (forceCheck) {
-        forceCheck.addEventListener("click", async () => {
-            forceCheck.disabled = true;
-            forceCheck.textContent = '⏳ Checking...';
-            forceCheck.classList.remove("btn-success");
-            forceCheck.classList.add("btn-fail");
-
-            await chrome.runtime.sendMessage({
-                type: 'force-check',
-                target: 'background',
-            });
-
-            setTimeout(() => {
-                forceCheck.disabled = false;
-                forceCheck.textContent = '🔍 Force Check';
-                forceCheck.classList.remove("btn-fail");
-                forceCheck.classList.add("btn-success");
-            }, 2000);
-        });
-    }
-
-    // Update status display
-    await updateStatusDisplay(statusText, reservedCount);
-
-    // Refresh status every 2 seconds
-    setInterval(async () => {
-        await updateStatusDisplay(statusText, reservedCount);
-    }, 2000);
-});
-
-async function updateStatusDisplay(statusText: HTMLSpanElement | null, reservedCount: HTMLSpanElement | null): Promise<void> {
-    if (!statusText && !reservedCount) return;
-
-    try {
-        // Try to get status from content script via tabs
-        const tabs = await chrome.tabs.query({url: "https://app.prolific.com/*"});
-
-        if (tabs.length > 0 && tabs[0].id) {
-            try {
-                const response = await chrome.tabs.sendMessage(tabs[0].id, {
-                    target: 'content-script',
-                    type: 'get-status',
-                });
-
-                if (response) {
-                    if (statusText) {
-                        statusText.textContent = response.enabled ? '🟢 Active' : '🔴 Disabled';
-                        statusText.style.color = response.enabled ? '#00c853' : '#ff1744';
-                    }
-                    if (reservedCount) {
-                        reservedCount.textContent = response.reservedCount?.toString() || '0';
-                    }
-                }
-            } catch (e) {
-                if (statusText) {
-                    statusText.textContent = '⚠️ Content script not loaded';
-                    statusText.style.color = '#ff9800';
-                }
-            }
-        } else {
-            if (statusText) {
-                statusText.textContent = '⚠️ No Prolific tab open';
-                statusText.style.color = '#ff9800';
-            }
-        }
-    } catch (e) {
-        // Ignore
-    }
+function updateVolumeDisplay(value: string): void {
+    const display = document.getElementById("volumeValue");
+    if (display) display.textContent = `${value}%`;
 }
 
 async function setCounter(counter: HTMLSpanElement): Promise<void> {
@@ -156,59 +54,170 @@ async function playAlert(): Promise<void> {
         target: 'background',
     });
     const playAudio = document.getElementById("playAudio") as HTMLButtonElement;
-    playAudio.disabled = true;
-    playAudio.classList.remove("btn-success");
-    playAudio.classList.add("btn-fail");
-    setTimeout(() => {
-        playAudio.disabled = false;
-        playAudio.classList.remove("btn-fail");
-        playAudio.classList.add("btn-success");
-    }, 500);
+    if (playAudio) {
+        playAudio.disabled = true;
+        playAudio.classList.add("btn-fail");
+        setTimeout(() => {
+            playAudio.disabled = false;
+            playAudio.classList.remove("btn-fail");
+        }, 500);
+    }
 }
 
 async function setAudioOption(selectAudio: HTMLSelectElement): Promise<void> {
     const result = await chrome.storage.sync.get("audio");
-    selectAudio.value = result["audio"];
+    if (result["audio"]) selectAudio.value = result["audio"];
     selectAudio.addEventListener("change", async function (): Promise<void> {
-        await chrome.storage.sync.set({["audio"]: selectAudio.value});
+        await chrome.storage.sync.set({ ["audio"]: selectAudio.value });
     });
 }
 
 async function setAudioCheckbox(autoAudio: HTMLInputElement): Promise<void> {
     const result = await chrome.storage.sync.get("audioActive");
-    autoAudio.checked = result["audioActive"];
-    autoAudio.addEventListener("click", async function (): Promise<void> {
-        await chrome.storage.sync.set({["audioActive"]: autoAudio.checked});
+    autoAudio.checked = result["audioActive"] !== false;
+    autoAudio.addEventListener("change", async function (): Promise<void> {
+        await chrome.storage.sync.set({ ["audioActive"]: autoAudio.checked });
     });
 }
 
 async function setShowNotification(showNotification: HTMLInputElement): Promise<void> {
     const result = await chrome.storage.sync.get("showNotification");
-    showNotification.checked = result["showNotification"];
-    showNotification.addEventListener("click", async function (): Promise<void> {
-        await chrome.storage.sync.set({["showNotification"]: showNotification.checked});
+    showNotification.checked = result["showNotification"] !== false;
+    showNotification.addEventListener("change", async function (): Promise<void> {
+        await chrome.storage.sync.set({ ["showNotification"]: showNotification.checked });
     });
 }
 
 async function setOpenProlific(openProlific: HTMLInputElement): Promise<void> {
     const result = await chrome.storage.sync.get("openProlific");
-    openProlific.checked = result["openProlific"];
-    openProlific.addEventListener("click", async function (): Promise<void> {
-        await chrome.storage.sync.set({["openProlific"]: openProlific.checked});
+    openProlific.checked = result["openProlific"] === true;
+    openProlific.addEventListener("change", async function (): Promise<void> {
+        await chrome.storage.sync.set({ ["openProlific"]: openProlific.checked });
     });
 }
 
-async function setAutoReserve(autoReserve: HTMLInputElement): Promise<void> {
-    const result = await chrome.storage.sync.get("autoReserveEnabled");
-    autoReserve.checked = result["autoReserveEnabled"] !== false; // Default to true
-    autoReserve.addEventListener("click", async function (): Promise<void> {
-        await chrome.storage.sync.set({["autoReserveEnabled"]: autoReserve.checked});
+// ======================== AUTO-RESERVE CONTROLS ========================
 
-        // Notify background to relay to content scripts
-        await chrome.runtime.sendMessage({
-            type: 'toggle-auto-reserve',
+async function setupAutoReserve(): Promise<void> {
+    const toggle = document.getElementById("autoReserve") as HTMLInputElement;
+    if (!toggle) return;
+
+    const result = await chrome.storage.sync.get("autoReserveEnabled");
+    toggle.checked = result["autoReserveEnabled"] !== false;
+
+    toggle.addEventListener("change", async () => {
+        await chrome.storage.sync.set({ ["autoReserveEnabled"]: toggle.checked });
+        chrome.runtime.sendMessage({
             target: 'background',
-            data: { enabled: autoReserve.checked },
+            type: 'toggle-auto-reserve',
+            data: { enabled: toggle.checked },
         });
     });
 }
+
+async function setupForceCheck(): Promise<void> {
+    const btn = document.getElementById("forceCheck") as HTMLButtonElement;
+    if (!btn) return;
+
+    btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "Checking...";
+
+        try {
+            chrome.runtime.sendMessage({
+                target: 'background',
+                type: 'force-check',
+            });
+        } catch (e) { }
+
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.textContent = "Force Check Now";
+        }, 2000);
+    });
+}
+
+// ======================== LIVE STATUS ========================
+
+function updateStatus(): void {
+    const statusCard = document.getElementById("statusCard");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const studyCount = document.getElementById("studyCount");
+    const reservedCount = document.getElementById("reservedCount");
+    const uptime = document.getElementById("uptime");
+
+    // Try to get status from content script via background
+    chrome.tabs.query({ url: "https://app.prolific.com/*" }, (tabs) => {
+        if (tabs.length === 0 || !tabs[0].id) {
+            // No Prolific tab
+            if (statusCard) statusCard.classList.add("disconnected");
+            if (statusText) statusText.textContent = "No Prolific tab open";
+            return;
+        }
+
+        chrome.tabs.sendMessage(tabs[0].id!, {
+            target: 'content-script',
+            type: 'get-status',
+        }, (response) => {
+            if (chrome.runtime.lastError || !response) {
+                if (statusCard) statusCard.classList.add("disconnected");
+                if (statusText) statusText.textContent = "Content script not loaded";
+                return;
+            }
+
+            if (statusCard) statusCard.classList.remove("disconnected");
+            if (statusText) statusText.textContent = response.enabled ? "Active & Monitoring" : "Paused";
+            if (studyCount) studyCount.textContent = (response.studyCount || 0).toString();
+            if (reservedCount) reservedCount.textContent = (response.reservedCount || 0).toString();
+            if (uptime) uptime.textContent = formatUptime(response.uptime || 0);
+        });
+    });
+}
+
+function formatUptime(ms: number): string {
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    return `${h}h ${m % 60}m`;
+}
+
+// ======================== INIT ========================
+
+document.addEventListener('DOMContentLoaded', async function () {
+    // Clear badge
+    await chrome.runtime.sendMessage({
+        type: 'clear-badge',
+        target: 'background',
+    });
+
+    // Setup tabs
+    setupTabs();
+
+    // Original settings
+    const autoAudio = document.getElementById("autoAudio") as HTMLInputElement;
+    const selectAudio = document.getElementById("selectAudio") as HTMLSelectElement;
+    const counter = document.getElementById("counter") as HTMLSpanElement;
+    const playAudioBtn = document.getElementById("playAudio") as HTMLButtonElement;
+    const showNotification = document.getElementById("showNotification") as HTMLInputElement;
+    const volume = document.getElementById("volume") as HTMLInputElement;
+    const openProlific = document.getElementById("openProlific") as HTMLInputElement;
+
+    if (autoAudio) await setAudioCheckbox(autoAudio);
+    if (selectAudio) await setAudioOption(selectAudio);
+    if (counter) await setCounter(counter);
+    if (playAudioBtn) playAudioBtn.addEventListener("click", playAlert);
+    if (showNotification) await setShowNotification(showNotification);
+    if (openProlific) await setOpenProlific(openProlific);
+    if (volume) await setVolume(volume);
+
+    // New auto-reserve controls
+    await setupAutoReserve();
+    await setupForceCheck();
+
+    // Live status updates
+    updateStatus();
+    setInterval(updateStatus, 3000);
+});
