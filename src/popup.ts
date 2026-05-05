@@ -141,6 +141,46 @@ async function setupForceCheck(): Promise<void> {
     });
 }
 
+// ======================== AI AUTO-SOLVER CONTROLS ========================
+
+async function setupAISettings(): Promise<void> {
+    const aiEnabled = document.getElementById("aiEnabled") as HTMLInputElement;
+    const aiSettingsGroup = document.getElementById("aiSettingsGroup") as HTMLDivElement;
+    const aiApiKey = document.getElementById("aiApiKey") as HTMLInputElement;
+    const aiBaseUrl = document.getElementById("aiBaseUrl") as HTMLInputElement;
+    const aiModel = document.getElementById("aiModel") as HTMLSelectElement;
+
+    if (!aiEnabled || !aiSettingsGroup || !aiApiKey || !aiBaseUrl || !aiModel) return;
+
+    // Load saved settings
+    const result = await chrome.storage.sync.get(["aiEnabled", "aiApiKey", "aiBaseUrl", "aiModel"]);
+    
+    aiEnabled.checked = result["aiEnabled"] === true;
+    aiSettingsGroup.style.display = aiEnabled.checked ? "block" : "none";
+    
+    if (result["aiApiKey"]) aiApiKey.value = result["aiApiKey"];
+    aiBaseUrl.value = result["aiBaseUrl"] || "https://api.openai.com/v1";
+    if (result["aiModel"]) aiModel.value = result["aiModel"];
+
+    // Event listeners
+    aiEnabled.addEventListener("change", async () => {
+        await chrome.storage.sync.set({ ["aiEnabled"]: aiEnabled.checked });
+        aiSettingsGroup.style.display = aiEnabled.checked ? "block" : "none";
+    });
+
+    aiApiKey.addEventListener("input", async () => {
+        await chrome.storage.sync.set({ ["aiApiKey"]: aiApiKey.value });
+    });
+
+    aiBaseUrl.addEventListener("input", async () => {
+        await chrome.storage.sync.set({ ["aiBaseUrl"]: aiBaseUrl.value });
+    });
+
+    aiModel.addEventListener("change", async () => {
+        await chrome.storage.sync.set({ ["aiModel"]: aiModel.value });
+    });
+}
+
 // ======================== HISTORY ========================
 
 async function loadHistory() {
@@ -272,6 +312,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     // New auto-reserve controls
     await setupAutoReserve();
     await setupForceCheck();
+    await setupAISettings();
 
     // Live status updates
     updateStatus();

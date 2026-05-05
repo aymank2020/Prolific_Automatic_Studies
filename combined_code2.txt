@@ -1,0 +1,1776 @@
+{
+  "manifest_version": 3,
+  "name": "Prolific Studies Notifier",
+  "version": "2.0.0",
+  "description": "Auto-detect and reserve Prolific studies. Monitors WhatsApp Web groups for study links.",
+
+  "permissions": [
+    "storage",
+    "notifications",
+    "offscreen",
+    "tabs",
+    "alarms",
+    "activeTab",
+    "scripting"
+  ],
+
+  "host_permissions": [
+    "https://app.prolific.com/*",
+    "https://internal-api.prolific.com/*",
+    "https://web.whatsapp.com/*"
+  ],
+
+  "background": {
+    "service_worker": "dist/background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://app.prolific.com/*"],
+      "js": ["dist/content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["dist/whatsapp-monitor.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "title": "Prolific get studies automatically"
+  },
+
+  "icons": {
+    "16": "imgs/logo.png",
+    "48": "imgs/logo.png",
+    "128": "imgs/logo.png"
+  }
+}
+/**
+ * Prolific Auto-Reserve Content Script v2
+ * Targets: https://app.prolific.com/*
+ * 
+ * From screenshots we know:
+ * - Reserve button text: "Take part in this study"
+ * - 404 page: "404 – Page Not Found" with Home/Support buttons
+ * - Study full error: "The study is full and therefore submissions can't be accepted"
+ * - Study cards in left sidebar with title, researcher, pay, duration, places
+ * - Nav: Studies | Submissions | About you | Messages
+ */
+// @ts-ignore: Isolated scope
+
+const CONFIG = {
+    // "Take part in this study" is the EXACT button text from screenshots
+    RESERVE_BUTTON_TEXT: [
+        'take part in this study',
+        'take part',
+        'reserve a place',
+        'reserve place',
+        'reserve',
+        'accept',
+        'start study',
+    ],
+    RESERVE_BUTTON_SELECTORS: [
+        'button[data-testid="take-part-button"]',
+        'button[data-testid="reserve-place-button"]',
+        'button[data-testid="accept-study-button"]',
+        'button[data-testid="start-study-button"]',
+        'a[data-testid="study-card-action"]',
+    ],
+    STUDY_CARD_SELECTORS: [
+        '[data-testid="study-card"]',
+        '[class*="StudyCard"]',
+        '[class*="study-card"]',
+        'a[href*="/studies/"]',
+    ],
+    // Error detection
+    STUDY_FULL_TEXT: [
+        'study is full',
+        'submissions can\'t be accepted',
+        'no places available',
+        'no more places',
+        'study has been paused',
+        'study has ended',
+    ],
+    POLL_INTERVAL: 500,
+    FAST_POLL_INTERVAL: 50,
+    FAST_POLL_DURATION: 5000,
+    MUTATION_DEBOUNCE: 10,
+    API_PATTERN: 'internal-api.prolific.com/api/v1',
+    LOG_PREFIX: '🚀 [Prolific Auto-Reserve]',
+};
+
+let isEnabled = true;
+let knownStudyIds = new Set<string>();
+let reservedStudyIds = new Set<string>();
+let knownStudiesData = new Map<string, any>();
+let lastStudyCount = 0;
+let fastPollTimer: any = null;
+let pollTimer: any = null;
+let observer: MutationObserver | null = null;
+let startTime = Date.now();
+
+function log(...args: any[]) { console.log(CONFIG.LOG_PREFIX, ...args); }
+
+function isTargetPage(): boolean {
+    // Only run aggressively on the studies page or individual study pages
+    return window.location.pathname.startsWith('/studies');
+}
+
+// ======================== 404 & ERROR HANDLING ========================
+
+function check404AndRedirect(): boolean {
+    const bodyText = document.body?.textContent || '';
+    if (bodyText.includes('404') && bodyText.includes('Page Not Found')) {
+        const isSpecificStudy = getStudyIdFromUrl() !== null;
+        if (isSpecificStudy) {
+            log('🔴 404 detected on specific study! Closing tab...');
+            notifyBg('close-tab');
+        } else {
+            log('🔴 404 detected! Redirecting to studies page...');
+            window.location.href = 'https://app.prolific.com/studies';
+        }
+        return true;
+    }
+    return false;
+}
+
+function checkStudyFull(): boolean {
+    const bodyText = (document.body?.textContent || '').toLowerCase();
+    for (const text of CONFIG.STUDY_FULL_TEXT) {
+        if (bodyText.includes(text)) {
+            const isSpecificStudy = getStudyIdFromUrl() !== null;
+            if (isSpecificStudy) {
+                log(`🔴 Study is full: "${text}". Closing tab...`);
+                // Wait a moment so user sees what happened, then close
+                setTimeout(() => {
+                    notifyBg('close-tab');
+                }, 1500);
+            } else {
+                log(`🔴 Study is full: "${text}". Redirecting to studies page...`);
+                setTimeout(() => {
+                    window.location.href = 'https://app.prolific.com/studies';
+                }, 1500);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+// ======================== BUTTON DETECTION ========================
+
+function findReserveButtons(): HTMLElement[] {
+    const buttons: HTMLElement[] = [];
+    const seen = new Set<HTMLElement>();
+
+    // Method 1: CSS selectors
+    for (const sel of CONFIG.RESERVE_BUTTON_SELECTORS) {
+        try {
+            document.querySelectorAll(sel).forEach(el => {
+                const h = el as HTMLElement;
+                if (!seen.has(h) && isVisible(h) && !h.hasAttribute('disabled')) {
+                    seen.add(h); buttons.push(h);
+                }
+            });
+        } catch (e) {}
+    }
+
+    // Method 2: Text content scan (most reliable based on screenshots)
+    document.querySelectorAll('button, a[role="button"], [role="button"]').forEach(el => {
+        const h = el as HTMLElement;
+        if (seen.has(h)) return;
+        const text = (h.textContent || '').toLowerCase().trim();
+        for (const pattern of CONFIG.RESERVE_BUTTON_TEXT) {
+            if (text.includes(pattern) && isVisible(h) && !h.hasAttribute('disabled')) {
+                seen.add(h); buttons.push(h);
+                break;
+            }
+        }
+    });
+
+    return buttons;
+}
+
+function isVisible(el: HTMLElement): boolean {
+    if (!el) return false;
+    const s = window.getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.offsetParent !== null;
+}
+
+// ======================== AUTO-RESERVE ========================
+
+function tryAutoReserve(): number {
+    if (!isEnabled) return 0;
+    const t0 = Date.now();
+    const buttons = findReserveButtons();
+    if (buttons.length === 0) return 0;
+
+    let clicked = 0;
+    for (const btn of buttons) {
+        const id = getStudyIdFromUrl() || getStudyIdFromElement(btn as Element) || `btn-${clicked}`;
+        if (reservedStudyIds.has(id)) continue;
+
+        log(`🎯 Clicking reserve button: "${btn.textContent?.trim()}"`);
+        try {
+            // Multiple click methods for React compatibility
+            btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            btn.click();
+            btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+            btn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+            reservedStudyIds.add(id);
+            clicked++;
+            
+            const studyData = knownStudiesData.get(id) || null;
+            notifyBg('study-reserved', { 
+                count: 1, 
+                id: id,
+                timestamp: Date.now(),
+                study: studyData
+            });
+
+            log(`🎉 Reserved study ${id} in ${Date.now() - t0}ms`);
+        } catch (e) {
+            log('❌ Click error:', e);
+        }
+    }
+
+    // If we didn't find the 'Take part' button directly, try clicking a study card first
+    if (clicked === 0) {
+        const cards = findStudyCards();
+        for (const card of cards) {
+            const h = card as HTMLElement;
+            // Don't click if we already know it
+            if (!h.dataset.botClicked) {
+                log(`🖱️ Clicking study card to reveal reserve button...`);
+                try {
+                    h.click();
+                    h.dataset.botClicked = "true";
+                    // We return 0 here because we haven't reserved it yet. 
+                    // Fast polling will catch the 'Take part' button when it renders.
+                } catch(e) {}
+                break; // Only click one at a time
+            }
+        }
+    }
+
+    if (clicked > 0) {
+        // Find the last clicked id (rough approximation since we might click multiple, but usually it's 1)
+        // If there's multiple, we'll just log the count, but for history we want the data of the ones we just reserved
+        // Actually, let's just use the id if it exists.
+        // In tryAutoReserve we loop and can send individual events per study.
+        // We already do btn.click() loop. 
+    }
+    return clicked;
+}
+
+function getStudyIdFromUrl(): string | null {
+    const m = window.location.href.match(/\/studies\/([a-f0-9]+)/i);
+    return m ? m[1] : null;
+}
+
+function getStudyIdFromElement(el: Element): string | null {
+    const link = el.closest('a[href*="/studies/"]') || el.querySelector('a[href*="/studies/"]');
+    if (link) {
+        const match = link.getAttribute('href')?.match(/\/studies\/([a-f0-9]+)/i);
+        return match ? match[1] : null;
+    }
+    return null;
+}
+
+function findStudyCards(): Element[] {
+    const cards: Element[] = [];
+    const seen = new Set<Element>();
+    for (const sel of CONFIG.STUDY_CARD_SELECTORS) {
+        try {
+            document.querySelectorAll(sel).forEach(el => {
+                if (!seen.has(el)) { seen.add(el); cards.push(el); }
+            });
+        } catch (e) {}
+    }
+    return cards;
+}
+
+// ======================== STUDY DETECTION ========================
+
+function onStudyDetected(source: string) {
+    if (!isTargetPage()) return;
+    
+    log(`🔔 Study detected via ${source}!`);
+    // Check for errors first
+    if (checkStudyFull()) return;
+    
+    const clicked = tryAutoReserve();
+    if (clicked > 0) {
+        log(`✅ Auto-reserved ${clicked} studies via ${source}`);
+    } else {
+        startFastPolling();
+    }
+    
+    // Only notify if we haven't already notified for this exact study count, to prevent spam
+    const currentCount = findStudyCards().length;
+    if (currentCount > lastStudyCount) {
+        notifyBg('studies-detected', { source, count: currentCount });
+        lastStudyCount = currentCount;
+    }
+}
+
+function startFastPolling() {
+    const end = Date.now() + CONFIG.FAST_POLL_DURATION;
+    if (fastPollTimer) clearInterval(fastPollTimer);
+    fastPollTimer = setInterval(() => {
+        if (Date.now() > end) { clearInterval(fastPollTimer); fastPollTimer = null; return; }
+        if (checkStudyFull()) { clearInterval(fastPollTimer); fastPollTimer = null; return; }
+        const c = tryAutoReserve();
+        if (c > 0) { clearInterval(fastPollTimer); fastPollTimer = null; }
+    }, CONFIG.FAST_POLL_INTERVAL);
+}
+
+// ======================== MUTATION OBSERVER ========================
+
+function setupObserver() {
+    if (observer) observer.disconnect();
+    let debounce: any = null;
+
+    observer = new MutationObserver((mutations) => {
+        let relevant = false;
+        for (const m of mutations) {
+            if (m.type === 'childList' && m.addedNodes.length > 0) {
+                for (const node of Array.from(m.addedNodes)) {
+                    if (node instanceof HTMLElement) {
+                        const t = (node.textContent || '').toLowerCase();
+                        if (t.includes('take part') || t.includes('reserve') || t.includes('study') ||
+                            t.includes('£') || t.includes('$') || t.includes('places') ||
+                            t.includes('404') || t.includes('page not found')) {
+                            relevant = true; break;
+                        }
+                    }
+                }
+            }
+            if (m.type === 'attributes' && m.target instanceof HTMLElement &&
+                m.attributeName === 'disabled' && m.target.tagName === 'BUTTON') {
+                relevant = true;
+            }
+            if (relevant) break;
+        }
+        if (relevant) {
+            if (debounce) clearTimeout(debounce);
+            debounce = setTimeout(() => {
+                if (!isTargetPage()) return;
+                if (!check404AndRedirect()) onStudyDetected('mutation');
+            }, CONFIG.MUTATION_DEBOUNCE);
+        }
+    });
+
+    const target = document.getElementById('app') || document.body;
+    observer.observe(target, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'class'] });
+    log('👁️ MutationObserver active');
+}
+
+// ======================== API INTERCEPTION ========================
+
+function interceptFetch() {
+    const orig = window.fetch;
+    window.fetch = async function (...args) {
+        const url = typeof args[0] === 'string' ? args[0] : (args[0] instanceof Request ? args[0].url : '');
+        const response = await orig.apply(this, args);
+        if (url.includes(CONFIG.API_PATTERN) && url.includes('stud')) {
+            try {
+                const clone = response.clone();
+                const data = await clone.json();
+                const studies = data?.results || (Array.isArray(data) ? data : null);
+                if (studies?.length > 0) {
+                    log(`📡 API: ${studies.length} studies from fetch`);
+                    let newCount = 0;
+                    for (const s of studies) {
+                        const id = s.id || s.study_id;
+                        if (id) {
+                            if (!knownStudyIds.has(id)) { knownStudyIds.add(id); newCount++; }
+                            knownStudiesData.set(id, s);
+                        }
+                    }
+                    if (newCount > 0 && isTargetPage()) onStudyDetected('api-fetch');
+                }
+            } catch (e) {}
+        }
+        return response;
+    };
+    log('🔌 Fetch interceptor installed');
+}
+
+function interceptXHR() {
+    const origOpen = XMLHttpRequest.prototype.open;
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (method: string, url: string | URL, ...rest: any[]) {
+        (this as any)._pUrl = url.toString();
+        return (origOpen as any).apply(this, [method, url, ...rest]);
+    };
+    XMLHttpRequest.prototype.send = function (...args: any[]) {
+        const url = (this as any)._pUrl || '';
+        if (url.includes(CONFIG.API_PATTERN) && url.includes('stud')) {
+            this.addEventListener('load', function () {
+                try {
+                    const data = JSON.parse(this.responseText);
+                    const studies = data?.results || (Array.isArray(data) ? data : null);
+                    if (studies?.length > 0) {
+                        log(`📡 API: ${studies.length} studies from XHR`);
+                        let n = 0;
+                        for (const s of studies) {
+                            const id = s.id || s.study_id;
+                            if (id) {
+                                if (!knownStudyIds.has(id)) { knownStudyIds.add(id); n++; }
+                                knownStudiesData.set(id, s);
+                            }
+                        }
+                        if (n > 0 && isTargetPage()) onStudyDetected('api-xhr');
+                    }
+                } catch (e) {}
+            });
+        }
+        return (origSend as any).apply(this, args);
+    };
+    log('🔌 XHR interceptor installed');
+}
+
+// ======================== NAVIGATION & AUTO-REFRESH ========================
+
+function setupNavMonitor() {
+    let lastUrl = location.href;
+    new MutationObserver(() => {
+        if (location.href !== lastUrl) {
+            lastUrl = location.href;
+            log(`🔀 Navigation: ${lastUrl}`);
+            if (lastUrl.includes('/studies')) {
+                setTimeout(() => { if (!check404AndRedirect()) onStudyDetected('nav'); }, 200);
+                setTimeout(() => { if (!check404AndRedirect()) onStudyDetected('nav-delay'); }, 800);
+            }
+        }
+    }).observe(document, { subtree: true, childList: true });
+
+    const origPush = history.pushState;
+    history.pushState = function (...args) {
+        origPush.apply(this, args);
+        setTimeout(() => {
+            if (location.href.includes('/studies') && !check404AndRedirect()) onStudyDetected('pushState');
+        }, 200);
+    };
+}
+
+function setupAutoRefresh() {
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && isTargetPage()) {
+            log('👁️ Tab visible, checking...');
+            if (!check404AndRedirect() && !checkStudyFull()) onStudyDetected('visibility');
+        }
+    });
+}
+
+function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(() => {
+        if (check404AndRedirect()) return;
+        const cards = findStudyCards();
+        if (cards.length > lastStudyCount) {
+            log(`📊 Poll: ${lastStudyCount} → ${cards.length} studies`);
+            lastStudyCount = cards.length;
+            onStudyDetected('poll');
+        } else if (cards.length > 0) {
+            tryAutoReserve();
+        }
+        lastStudyCount = cards.length;
+    }, CONFIG.POLL_INTERVAL);
+}
+
+// ======================== COMMUNICATION ========================
+
+function notifyBg(type: string, data?: any) {
+    try {
+        chrome.runtime.sendMessage({ target: 'background', type, data });
+    } catch (e) {}
+}
+
+function setupMessages() {
+    chrome.runtime.onMessage.addListener((msg, _s, respond) => {
+        if (msg.target !== 'content-script') return;
+        switch (msg.type) {
+            case 'toggle-auto-reserve':
+                isEnabled = msg.data?.enabled ?? !isEnabled;
+                respond({ enabled: isEnabled });
+                break;
+            case 'get-status':
+                respond({ enabled: isEnabled, studyCount: findStudyCards().length,
+                    reservedCount: reservedStudyIds.size, knownStudies: knownStudyIds.size,
+                    uptime: Date.now() - startTime, currentUrl: location.href });
+                break;
+            case 'force-check':
+                if (!check404AndRedirect()) onStudyDetected('manual');
+                respond({ checked: true });
+                break;
+            case 'try-reserve':
+                respond({ clicked: tryAutoReserve() });
+                break;
+        }
+    });
+}
+
+// ======================== VISUAL INDICATOR ========================
+
+function addIndicator() {
+    const el = document.createElement('div');
+    el.id = 'prolific-auto-indicator';
+    el.innerHTML = '🚀';
+    el.title = 'Auto-Reserve Active';
+    el.style.cssText = `position:fixed;bottom:10px;right:10px;width:32px;height:32px;border-radius:50%;
+        background:rgba(0,200,83,0.9);display:flex;align-items:center;justify-content:center;
+        font-size:16px;z-index:999999;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3);
+        transition:all 0.3s;animation:pulse-g 2s infinite;`;
+    const css = document.createElement('style');
+    css.textContent = `@keyframes pulse-g{0%,100%{box-shadow:0 2px 8px rgba(0,200,83,0.3)}
+        50%{box-shadow:0 2px 16px rgba(0,200,83,0.6)}}
+        #prolific-auto-indicator:hover{transform:scale(1.2)}
+        #prolific-auto-indicator.off{background:rgba(200,50,50,0.9);animation:none}`;
+    document.head.appendChild(css);
+    el.addEventListener('click', () => {
+        isEnabled = !isEnabled;
+        el.classList.toggle('off', !isEnabled);
+    });
+    document.body.appendChild(el);
+}
+
+// ======================== INIT ========================
+
+function init() {
+    log('🚀 Initializing v2...');
+    
+    // Check if we are on the correct page (ignore side tabs like settings, account)
+    if (!isTargetPage()) {
+        log('⏸️ Not on /studies page, bot sleeping to prevent interference.');
+        setupNavMonitor(); // Only monitor navigation so we can wake up if they go to /studies
+        return;
+    }
+
+    // Immediate: check for 404
+    if (check404AndRedirect()) return;
+
+    // Load prefs
+    try {
+        chrome.storage.sync.get('autoReserveEnabled', (r) => {
+            if (r.autoReserveEnabled !== undefined) isEnabled = r.autoReserveEnabled;
+        });
+    } catch (e) {}
+
+    setupMessages();
+    interceptFetch();
+    interceptXHR();
+    setupObserver();
+    setupNavMonitor();
+    setupAutoRefresh();
+    startPolling();
+    addIndicator();
+
+    // Initial check after page settles
+    setTimeout(() => {
+        if (check404AndRedirect()) return;
+        checkStudyFull();
+        const cards = findStudyCards();
+        lastStudyCount = cards.length;
+        log(`📊 Initial: ${cards.length} cards, URL: ${location.href}`);
+        
+        // If on a specific study page, immediately try to reserve
+        if (getStudyIdFromUrl()) {
+            log('📋 On study detail page, trying immediate reserve...');
+            onStudyDetected('initial-study-page');
+        } else if (cards.length > 0) {
+            onStudyDetected('initial');
+        }
+    }, 500);
+
+    log('✅ All systems active!');
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+} else {
+    init();
+}
+import Reason = chrome.offscreen.Reason;
+import ContextType = chrome.runtime.ContextType;
+
+// ======================== CONSTANTS ========================
+const AUDIO_ACTIVE = "audioActive";
+const SHOW_NOTIFICATION = "showNotification";
+const OPEN_PROLIFIC = "openProlific";
+const AUDIO = "audio";
+const VOLUME = "volume";
+const COUNTER = "counter";
+const AUTO_RESERVE = "autoReserveEnabled";
+const ICON_URL = 'imgs/logo.png';
+const TITLE = 'Prolific Automatic Studies';
+const MESSAGE = 'A new study has been posted on Prolific!';
+const PROLIFIC_TITLE = 'prolificTitle';
+
+// ======================== STATE ========================
+let creating: Promise<void> | null;
+let volume: number;
+let audio: string;
+let shouldSendNotification: boolean;
+let shouldPlayAudio: boolean;
+let previousTitle: string;
+
+// ======================== API POLLING (Background) ========================
+const API_BASE = 'https://internal-api.prolific.com/api/v1';
+const POLL_ALARM_NAME = 'prolific-api-poll';
+const FAST_POLL_ALARM_NAME = 'prolific-fast-poll';
+
+// ======================== MESSAGE HANDLERS ========================
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    handleMessages(message, sender, sendResponse);
+    return true; // Needed for async sendResponse
+});
+
+chrome.notifications.onClicked.addListener(function (notificationId: string): void {
+    chrome.tabs.create({url: "https://app.prolific.com/studies", active: true});
+    chrome.notifications.clear(notificationId);
+});
+
+chrome.notifications.onButtonClicked.addListener(function (notificationId: string, buttonIndex: number): void {
+    if (buttonIndex === 0) {
+        chrome.tabs.create({url: "https://app.prolific.com/studies", active: true});
+    }
+    chrome.notifications.clear(notificationId);
+});
+
+// ======================== INSTALLATION ========================
+chrome.runtime.onInstalled.addListener(async (details: { reason: string; }): Promise<void> => {
+    if(details.reason === "install"){
+        await setInitialValues();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        await chrome.tabs.create({url: "https://github.com/aymank2020/Prolific_Automatic_Studies", active: true});
+    }
+    // Set up alarms for periodic checking
+    setupAlarms();
+});
+
+// ======================== STARTUP ========================
+chrome.runtime.onStartup.addListener(async function(): Promise<void> {
+    if (await getValueFromStorage(OPEN_PROLIFIC, false)) {
+        await chrome.tabs.create({url: "https://app.prolific.com/studies", active: false});
+    }
+    setupAlarms();
+});
+
+// ======================== ALARMS ========================
+function setupAlarms(): void {
+    // Regular poll every 30 seconds
+    chrome.alarms.create(POLL_ALARM_NAME, {
+        periodInMinutes: 0.5, // 30 seconds
+    });
+}
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name === POLL_ALARM_NAME) {
+        await checkProlificTab();
+    }
+    if (alarm.name === FAST_POLL_ALARM_NAME) {
+        await triggerContentScriptCheck();
+    }
+});
+
+// ======================== UTILITY FUNCTIONS ========================
+function getValueFromStorage<T>(key: string, defaultValue: T): Promise<T> {
+    return new Promise((resolve): void => {
+        chrome.storage.sync.get(key, function (result): void {
+            resolve((result[key] !== undefined) ? result[key] as T : defaultValue);
+        });
+    });
+}
+
+function getNumberFromTitle(title: string): number {
+    const match: RegExpMatchArray | null = title.match(/\((\d+)\)/);
+    return match ? parseInt(match[1]) : 0;
+}
+
+// ======================== MESSAGE HANDLER ========================
+async function handleMessages(message: { target: string; type: any; data?: any; }, sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void): Promise<void> {
+    if (message.target !== 'background') {
+        return;
+    }
+
+    switch (message.type) {
+        case 'play-sound':
+            audio = await getValueFromStorage(AUDIO, 'alert1.mp3');
+            volume = await getValueFromStorage(VOLUME, 100) / 100;
+            await playAudio(audio, volume);
+            sendNotification();
+            break;
+
+        case 'show-notification':
+            sendNotification();
+            break;
+
+        case 'clear-badge':
+            await chrome.action.setBadgeText({text: ''});
+            break;
+
+        // New: Study detected by content script
+        case 'studies-detected':
+            console.log('[Background] Studies detected:', message.data);
+            await handleStudiesDetected(message.data);
+            break;
+
+        // New: Study reserved by content script
+        case 'study-reserved':
+            console.log('[Background] Study reserved:', message.data);
+            await handleStudyReserved(message.data);
+            if (message.data?.count) {
+                await addToHistory(message.data);
+            }
+            break;
+
+        // New: Toggle auto-reserve
+        case 'toggle-auto-reserve':
+            const enabled = message.data?.enabled ?? true;
+            await chrome.storage.sync.set({[AUTO_RESERVE]: enabled});
+            // Forward to content script
+            await broadcastToContentScripts({
+                target: 'content-script',
+                type: 'toggle-auto-reserve',
+                data: { enabled },
+            });
+            break;
+
+        // New: Force check from popup
+        case 'force-check':
+            await triggerContentScriptCheck();
+            break;
+
+        // New: Get status from content scripts
+        case 'get-status':
+            // This will be handled via sendResponse in the listener
+            break;
+
+        // WhatsApp: Open study link from WhatsApp monitor
+        case 'open-study-link':
+            console.log('[Background] Opening study from WhatsApp:', message.data?.url);
+            if (message.data?.url) {
+                await chrome.tabs.create({ url: message.data.url, active: true });
+                // Play sound alert
+                shouldPlayAudio = await getValueFromStorage(AUDIO_ACTIVE, true);
+                if (shouldPlayAudio) {
+                    audio = await getValueFromStorage(AUDIO, 'alert1.mp3');
+                    volume = await getValueFromStorage(VOLUME, 100) / 100;
+                    await playAudio(audio, volume);
+                }
+                // Send notification
+                sendNotification(`📱 Study from WhatsApp! Opening: ${message.data.studyId || 'unknown'}`);
+            }
+            break;
+
+        // WhatsApp: Study found notification
+        case 'whatsapp-study-found':
+            console.log('[Background] WhatsApp study found:', message.data);
+            shouldSendNotification = await getValueFromStorage(SHOW_NOTIFICATION, true);
+            if (shouldSendNotification) {
+                sendNotification(`📱 New study link from WhatsApp! ID: ${message.data?.studyId || 'unknown'}`);
+            }
+            break;
+
+        // Content Script: Close Tab
+        case 'close-tab':
+            console.log('[Background] Closing tab as requested by content script:', sender.tab?.id);
+            if (sender.tab?.id) {
+                chrome.tabs.remove(sender.tab.id).catch(e => console.error("Failed to close tab:", e));
+            }
+            break;
+    }
+}
+
+async function addToHistory(data: any) {
+    try {
+        const history: any[] = await getValueFromStorage<any[]>('studyHistory', []);
+        
+        let studyInfo = data.study || {};
+        
+        history.unshift({
+            timestamp: Date.now(),
+            count: data.count || 1,
+            id: data.id || studyInfo.id || 'unknown',
+            title: studyInfo.name || 'Unknown Study',
+            researcher: studyInfo.researcher?.name || 'Unknown Researcher',
+            pay: studyInfo.reward || 0,
+            payPerHour: studyInfo.estimated_reward_per_hour || 0,
+            duration: studyInfo.estimated_completion_time || 0,
+            places: studyInfo.total_available_places || 0,
+            source: data.source || 'auto'
+        });
+        // Keep only last 50 studies for a richer history
+        if (history.length > 50) history.length = 50;
+        await chrome.storage.local.set({ studyHistory: history });
+    } catch (e) {}
+}
+
+// ======================== STUDY HANDLERS ========================
+async function handleStudiesDetected(data: any): Promise<void> {
+    shouldSendNotification = await getValueFromStorage(SHOW_NOTIFICATION, true);
+    if (shouldSendNotification) {
+        sendNotification(data?.count ? `${data.count} studies available!` : undefined);
+    }
+
+    shouldPlayAudio = await getValueFromStorage(AUDIO_ACTIVE, true);
+    if (shouldPlayAudio) {
+        audio = await getValueFromStorage(AUDIO, 'alert1.mp3');
+        volume = await getValueFromStorage(VOLUME, 100) / 100;
+        await playAudio(audio, volume);
+    }
+
+    // Update badge
+    if (data?.count) {
+        await updateBadge(data.count);
+    }
+
+    // Bring Prolific tab to front
+    await focusProlificTab();
+}
+
+async function handleStudyReserved(data: any): Promise<void> {
+    const count = data?.count || 1;
+    await updateCounterAndBadge(count);
+
+    // Send success notification
+    chrome.notifications.create({
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL(ICON_URL),
+        title: '🎉 Study Reserved!',
+        message: `Successfully reserved ${count} study/studies!`,
+        buttons: [{title: 'Open Prolific'}, {title: 'Dismiss'}],
+    });
+
+    // Play success sound
+    shouldPlayAudio = await getValueFromStorage(AUDIO_ACTIVE, true);
+    if (shouldPlayAudio) {
+        audio = await getValueFromStorage(AUDIO, 'alert1.mp3');
+        volume = await getValueFromStorage(VOLUME, 100) / 100;
+        await playAudio(audio, volume);
+    }
+}
+
+// ======================== PROLIFIC TAB MANAGEMENT ========================
+
+/**
+ * Find the active Prolific tab
+ */
+async function findProlificTab(): Promise<chrome.tabs.Tab | null> {
+    const tabs = await chrome.tabs.query({url: "https://app.prolific.com/*"});
+    return tabs.length > 0 ? tabs[0] : null;
+}
+
+/**
+ * Focus the Prolific tab
+ */
+async function focusProlificTab(): Promise<void> {
+    const tab = await findProlificTab();
+    if (tab && tab.id) {
+        try {
+            await chrome.tabs.update(tab.id, {active: true});
+            if (tab.windowId) {
+                await chrome.windows.update(tab.windowId, {focused: true});
+            }
+        } catch (e) {
+            console.log('[Background] Could not focus tab:', e);
+        }
+    }
+}
+
+/**
+ * Check the Prolific tab status periodically
+ */
+async function checkProlificTab(): Promise<void> {
+    const tab = await findProlificTab();
+    if (!tab) return;
+
+    // If the tab title indicates studies available, trigger notification
+    if (tab.title) {
+        const currentNumber = getNumberFromTitle(tab.title);
+        if (currentNumber > 0) {
+            console.log(`[Background] Alarm check: ${currentNumber} studies detected from title`);
+            await handleStudiesDetected({ count: currentNumber, source: 'alarm' });
+        }
+    }
+}
+
+/**
+ * Send a message to all content scripts on Prolific tabs
+ */
+async function broadcastToContentScripts(message: any): Promise<void> {
+    const tabs = await chrome.tabs.query({url: "https://app.prolific.com/*"});
+    for (const tab of tabs) {
+        if (tab.id) {
+            try {
+                await chrome.tabs.sendMessage(tab.id, message);
+            } catch (e) {
+                // Content script may not be ready
+            }
+        }
+    }
+}
+
+/**
+ * Trigger content script to check for studies immediately
+ */
+async function triggerContentScriptCheck(): Promise<void> {
+    await broadcastToContentScripts({
+        target: 'content-script',
+        type: 'force-check',
+    });
+}
+
+// ======================== TAB LISTENER (Original + Enhanced) ========================
+chrome.tabs.onUpdated.addListener(async (_: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab): Promise<void> => {
+    previousTitle = await getValueFromStorage(PROLIFIC_TITLE, 'Prolific');
+
+    if (tab.url && tab.url.includes('https://app.prolific.com/') && changeInfo.title && changeInfo.title !== previousTitle && tab.status === 'complete') {
+        const previousNumber: number = getNumberFromTitle(previousTitle);
+        const currentNumber: number = getNumberFromTitle(changeInfo.title);
+        await chrome.storage.sync.set({[PROLIFIC_TITLE]: changeInfo.title});
+
+        if (changeInfo.title.trim() !== 'Prolific' && currentNumber > previousNumber) {
+            shouldSendNotification = await getValueFromStorage(SHOW_NOTIFICATION, true);
+            if (shouldSendNotification) {
+                sendNotification();
+            }
+
+            shouldPlayAudio = await getValueFromStorage(AUDIO_ACTIVE, true);
+            if (shouldPlayAudio) {
+                audio = await getValueFromStorage(AUDIO, 'alert1.mp3');
+                volume = await getValueFromStorage(VOLUME, 100) / 100;
+                await playAudio(audio, volume);
+            }
+
+            await updateCounterAndBadge(currentNumber - previousNumber);
+
+            // NEW: Also trigger content script to try auto-reserving
+            if (tab.id) {
+                try {
+                    await chrome.tabs.sendMessage(tab.id, {
+                        target: 'content-script',
+                        type: 'try-reserve',
+                    });
+                } catch (e) {
+                    console.log('[Background] Content script not ready');
+                }
+            }
+        }
+    }
+});
+
+// ======================== AUDIO ========================
+async function playAudio(audio: string = 'alert1.mp3', volume: number = 1.0): Promise<void> {
+    await setupOffscreenDocument('audio/audio.html');
+    const req = {
+        audio: audio,
+        volume: volume
+    };
+    await chrome.runtime.sendMessage({
+        type: 'play-sound',
+        target: 'offscreen-doc',
+        data: req
+    });
+}
+
+// ======================== NOTIFICATIONS ========================
+function sendNotification(customMessage?: string): void {
+    chrome.notifications.create({
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL(ICON_URL),
+        title: TITLE,
+        message: customMessage || MESSAGE,
+        buttons: [{title: 'Open Prolific'}, {title: 'Dismiss'}],
+    });
+}
+
+// ======================== BADGE ========================
+async function updateBadge(counter: number): Promise<void> {
+    await chrome.action.setBadgeText({text: counter.toString()});
+    await chrome.action.setBadgeBackgroundColor({color: "#9dec14"});
+
+    setTimeout(async (): Promise<void> => {
+        await chrome.action.setBadgeText({text: ''});
+    }, 20000);
+}
+
+async function updateCounterAndBadge(count: number = 1): Promise<void> {
+    let counter: number = await getValueFromStorage(COUNTER, 0) + count;
+    await chrome.storage.sync.set({ [COUNTER]: counter });
+    await updateBadge(count);
+}
+
+// ======================== STORAGE ========================
+async function setInitialValues(): Promise<void> {
+    await Promise.all([
+        chrome.storage.sync.set({ [AUDIO_ACTIVE]: true }),
+        chrome.storage.sync.set({ [AUDIO]: "alert1.mp3" }),
+        chrome.storage.sync.set({ [SHOW_NOTIFICATION]: true }),
+        chrome.storage.sync.set({ [VOLUME]: 100 }),
+        chrome.storage.sync.set({ [AUTO_RESERVE]: true }),
+    ]);
+}
+
+// ======================== OFFSCREEN DOCUMENT ========================
+async function setupOffscreenDocument(path: string): Promise<void> {
+    const offscreenUrl: string = chrome.runtime.getURL(path);
+    const existingContexts = await chrome.runtime.getContexts({
+        contextTypes: [ContextType.OFFSCREEN_DOCUMENT],
+        documentUrls: [offscreenUrl]
+    });
+
+    if (existingContexts.length > 0) {
+        return;
+    }
+    if (creating) {
+        await creating;
+    } else {
+        creating = chrome.offscreen.createDocument({
+            url: path,
+            reasons: [Reason.AUDIO_PLAYBACK],
+            justification: 'Audio playback'
+        });
+        await creating;
+        creating = null;
+    }
+}
+
+// ======================== DYNAMIC SCRIPT INJECTION ========================
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status === 'complete' && tab.url?.includes('PROLIFIC_PID=')) {
+        chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            files: ["dist/study-scraper.js"]
+        }).catch(e => console.error("Script injection failed:", e));
+    }
+});
+/**
+ * WhatsApp Web Monitor for Prolific Study Links
+ * ================================================
+ * Monitors WhatsApp Web for Prolific study links in group chats
+ * and immediately opens them for auto-reservation.
+ *
+ * Target groups: AI Training 2, AI Training 3, Prolific تنبيهات,
+ * Prolific Exclusive Leaders, Ai Jobs& Websites V3, etc.
+ */
+// @ts-ignore: Isolated scope
+
+// ======================== CONFIGURATION ========================
+const WA_CONFIG = {
+    // Pattern to match Prolific study URLs
+    PROLIFIC_URL_PATTERN: /https?:\/\/app\.prolific\.com\/studies\/[a-f0-9]+/gi,
+
+    // Alternative patterns (some links may have query params)
+    PROLIFIC_URL_PATTERN_FULL: /https?:\/\/app\.prolific\.com\/studies\/[a-f0-9]+(\?[^\s"'<>)}\]]*)?/gi,
+
+    // How often to scan for new messages (ms)
+    SCAN_INTERVAL: 500,
+
+    // Debounce for mutation observer (ms)
+    MUTATION_DEBOUNCE: 100,
+
+    // Storage key for processed links
+    PROCESSED_LINKS_KEY: 'processedProlificLinks',
+
+    // Maximum age for a link to be auto-opened (ms) - 5 minutes
+    MAX_LINK_AGE: 5 * 60 * 1000,
+
+    // Log prefix
+    LOG_PREFIX: '📱 [WA-Prolific Monitor]',
+
+    // Sound notification
+    PLAY_SOUND: true,
+
+    // Auto-open links
+    AUTO_OPEN: true,
+
+    // Maximum links to track (prevent memory leak)
+    MAX_TRACKED_LINKS: 500,
+
+    // WhatsApp message selectors
+    MESSAGE_SELECTORS: [
+        '[data-testid="msg-container"]',
+        '.message-in',
+        '._amjw',
+        '._amjv',
+        '[class*="message"]',
+        'div[data-id]',
+    ],
+
+    // WhatsApp link selectors inside messages
+    LINK_SELECTORS: [
+        'a[href*="app.prolific.com"]',
+        'a[href*="prolific.com/studies"]',
+        '[data-testid="link-preview"]',
+        'a.selectable-text',
+        'span.selectable-text a',
+    ],
+
+    // Text content selectors (for links in plain text)
+    TEXT_SELECTORS: [
+        'span.selectable-text',
+        'span[dir="ltr"]',
+        'span[dir="auto"]',
+        '.copyable-text',
+        '._ao3e', // WhatsApp text content class
+    ],
+};
+
+// ======================== STATE ========================
+let processedLinks = new Set<string>();
+let waObserver: MutationObserver | null = null;
+let scanTimer: ReturnType<typeof setInterval> | null = null;
+let lastScanTime = 0;
+let waIsEnabled = true;
+let linkCount = 0;
+let isInitialLoad = true; // Prevents auto-opening old links when DOM renders initially
+
+// ======================== LOGGING ========================
+function waLog(...args: any[]) {
+    console.log(WA_CONFIG.LOG_PREFIX, ...args);
+}
+
+// ======================== LINK EXTRACTION ========================
+
+/**
+ * Extract all Prolific study URLs from a text string
+ */
+function extractProlificLinks(text: string): string[] {
+    if (!text) return [];
+
+    const links: string[] = [];
+    const matches = text.match(WA_CONFIG.PROLIFIC_URL_PATTERN_FULL);
+
+    if (matches) {
+        for (const match of matches) {
+            // Normalize the URL (remove trailing punctuation, query params for dedup)
+            const cleanUrl = match.replace(/[.,;:!?)}\]]+$/, '');
+            const baseUrl = cleanUrl.split('?')[0]; // Base URL without query params
+            if (baseUrl && !links.includes(baseUrl)) {
+                links.push(baseUrl);
+            }
+        }
+    }
+
+    return links;
+}
+
+/**
+ * Extract study ID from a Prolific URL
+ */
+function extractStudyId(url: string): string | null {
+    const match = url.match(/\/studies\/([a-f0-9]+)/i);
+    return match ? match[1] : null;
+}
+
+// ======================== MESSAGE SCANNING ========================
+
+/**
+ * Scan all visible messages for Prolific links
+ */
+function scanForProlificLinks(): string[] {
+    const foundLinks: string[] = [];
+
+    // Method 1: Find direct <a> links to Prolific
+    for (const selector of WA_CONFIG.LINK_SELECTORS) {
+        try {
+            const links = document.querySelectorAll(selector);
+            links.forEach(link => {
+                const href = (link as HTMLAnchorElement).href || link.getAttribute('href') || '';
+                const extracted = extractProlificLinks(href);
+                foundLinks.push(...extracted);
+            });
+        } catch (e) { }
+    }
+
+    // Method 2: Search text content for Prolific URLs (plain text links)
+    for (const selector of WA_CONFIG.TEXT_SELECTORS) {
+        try {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(el => {
+                const text = el.textContent || '';
+                if (text.includes('prolific.com')) {
+                    const extracted = extractProlificLinks(text);
+                    foundLinks.push(...extracted);
+                }
+            });
+        } catch (e) { }
+    }
+
+    // Method 3: Search ALL anchor tags inside the active chat container only (Performance Fix)
+    const chatContainer = document.querySelector('#main') || document;
+    const allLinks = chatContainer.querySelectorAll('a[href*="prolific.com/studies/"]');
+    allLinks.forEach(link => {
+        const href = (link as HTMLAnchorElement).href || '';
+        if (href.includes('prolific.com/studies/')) {
+            const extracted = extractProlificLinks(href);
+            foundLinks.push(...extracted);
+        }
+    });
+
+    // Deduplicate
+    return [...new Set(foundLinks)];
+}
+
+/**
+ * Process newly discovered links
+ */
+function processNewLinks(links: string[]) {
+    for (const link of links) {
+        const studyId = extractStudyId(link);
+        if (!studyId) continue;
+
+        // Skip if already processed
+        if (processedLinks.has(studyId)) continue;
+
+        // Mark as processed
+        processedLinks.add(studyId);
+        linkCount++;
+
+        // Trim processed links set if too large
+        if (processedLinks.size > WA_CONFIG.MAX_TRACKED_LINKS) {
+            const arr = Array.from(processedLinks);
+            processedLinks = new Set(arr.slice(-200)); // Keep last 200
+        }
+
+        waLog(`🆕 New Prolific study link detected: ${link}`);
+        waLog(`📋 Study ID: ${studyId}`);
+
+        // Save to storage
+        saveLinkToStorage(studyId, link);
+
+        // Auto-open the link (ONLY if not during initial load)
+        if (waIsEnabled && WA_CONFIG.AUTO_OPEN) {
+            if (isInitialLoad) {
+                waLog(`🤫 Initial load phase - silently tracking study ID: ${studyId}`);
+            } else {
+                openStudyLink(link, studyId);
+            }
+        }
+
+        // Notify background script
+        waNotifyBg('whatsapp-study-found', {
+            url: link,
+            studyId: studyId,
+            timestamp: Date.now(),
+        });
+    }
+}
+
+// ======================== LINK ACTIONS ========================
+
+/**
+ * Open a study link in a new tab with focus
+ */
+function openStudyLink(url: string, studyId: string) {
+    waLog(`🚀 Opening study: ${url}`);
+
+    // Method 1: Send to background to open tab (preferred - handles focus)
+    try {
+        chrome.runtime.sendMessage({
+            target: 'background',
+            type: 'open-study-link',
+            data: {
+                url: url,
+                studyId: studyId,
+            },
+        });
+    } catch (e) {
+        // Fallback: open directly
+        waLog('⚠️ Background unavailable, opening directly');
+        window.open(url, '_blank');
+    }
+
+    // Play notification sound
+    playDetectionSound();
+
+    // Show visual flash notification in WhatsApp
+    showInPageNotification(studyId, url);
+}
+
+/**
+ * Play a quick beep/notification sound
+ */
+function playDetectionSound() {
+    try {
+        chrome.runtime.sendMessage({
+            target: 'background',
+            type: 'play-sound',
+        });
+    } catch (e) {
+        // Fallback: simple beep
+        try {
+            const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.type = 'sine';
+            oscillator.frequency.value = 880;
+            gainNode.gain.value = 0.3;
+            oscillator.start();
+            setTimeout(() => oscillator.stop(), 200);
+        } catch (e2) { }
+    }
+}
+
+/**
+ * Show a visual notification banner in WhatsApp
+ */
+function showInPageNotification(studyId: string, url: string) {
+    // Remove any existing notification
+    const existing = document.getElementById('prolific-wa-notification');
+    if (existing) existing.remove();
+
+    const notification = document.createElement('div');
+    notification.id = 'prolific-wa-notification';
+    notification.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 24px;">🚀</span>
+            <div>
+                <strong>Prolific Study Detected!</strong><br>
+                <small>Study ${studyId.substring(0, 8)}... → Opening & reserving...</small>
+            </div>
+        </div>
+    `;
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: linear-gradient(135deg, #1565c0, #0d47a1);
+        color: white;
+        padding: 12px 24px;
+        border-radius: 12px;
+        z-index: 9999999;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-size: 14px;
+        animation: slideDown 0.3s ease-out, fadeOut 0.5s ease-in 4s forwards;
+        cursor: pointer;
+    `;
+
+    // Add animation styles
+    if (!document.getElementById('prolific-wa-styles')) {
+        const style = document.createElement('style');
+        style.id = 'prolific-wa-styles';
+        style.textContent = `
+            @keyframes slideDown {
+                from { transform: translateX(-50%) translateY(-100px); opacity: 0; }
+                to { transform: translateX(-50%) translateY(0); opacity: 1; }
+            }
+            @keyframes fadeOut {
+                to { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    // Click to open the link
+    notification.addEventListener('click', () => {
+        window.open(url, '_blank');
+        notification.remove();
+    });
+
+    document.body.appendChild(notification);
+
+    // Auto-remove after 5 seconds
+    setTimeout(() => notification.remove(), 5000);
+}
+
+// ======================== STORAGE ========================
+
+function saveLinkToStorage(studyId: string, url: string) {
+    try {
+        chrome.storage.local.get(WA_CONFIG.PROCESSED_LINKS_KEY, (result) => {
+            const links = result[WA_CONFIG.PROCESSED_LINKS_KEY] || {};
+            links[studyId] = {
+                url: url,
+                timestamp: Date.now(),
+                opened: true,
+            };
+            chrome.storage.local.set({ [WA_CONFIG.PROCESSED_LINKS_KEY]: links });
+        });
+    } catch (e) { }
+}
+
+function loadProcessedLinks() {
+    try {
+        chrome.storage.local.get(WA_CONFIG.PROCESSED_LINKS_KEY, (result) => {
+            const links = result[WA_CONFIG.PROCESSED_LINKS_KEY] || {};
+            for (const studyId of Object.keys(links)) {
+                processedLinks.add(studyId);
+            }
+            waLog(`📂 Loaded ${processedLinks.size} previously processed links`);
+        });
+    } catch (e) { }
+}
+
+// ======================== MUTATION OBSERVER ========================
+
+/**
+ * Watch for new messages being added to the chat
+ */
+function setupWAObserver() {
+    if (waObserver) {
+        waObserver.disconnect();
+    }
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    waObserver = new MutationObserver((mutations) => {
+        let hasNewContent = false;
+
+        for (const mutation of mutations) {
+            if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                for (const node of Array.from(mutation.addedNodes)) {
+                    if (node instanceof HTMLElement) {
+                        const text = node.textContent || '';
+                        // Quick check: does this contain anything Prolific-related?
+                        if (text.includes('prolific') || text.includes('Prolific') ||
+                            text.includes('app.prolific.com')) {
+                            hasNewContent = true;
+                            break;
+                        }
+                        // Also check for any links
+                        const links = node.querySelectorAll('a[href*="prolific"]');
+                        if (links.length > 0) {
+                            hasNewContent = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (hasNewContent) break;
+        }
+
+        if (hasNewContent) {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                waLog('🔔 New Prolific-related content detected in WhatsApp!');
+                const links = scanForProlificLinks();
+                processNewLinks(links);
+            }, WA_CONFIG.MUTATION_DEBOUNCE);
+        }
+    });
+
+    // Observe the entire app for changes
+    const target = document.getElementById('app') || document.body;
+    waObserver.observe(target, {
+        childList: true,
+        subtree: true,
+    });
+
+    waLog('👁️ WhatsApp MutationObserver active');
+}
+
+// ======================== POLLING ========================
+
+function waStartPolling() {
+    if (scanTimer) clearInterval(scanTimer);
+
+    scanTimer = setInterval(() => {
+        const links = scanForProlificLinks();
+        if (links.length > 0) {
+            processNewLinks(links);
+        }
+    }, WA_CONFIG.SCAN_INTERVAL);
+
+    waLog(`🔄 Polling started (${WA_CONFIG.SCAN_INTERVAL}ms interval)`);
+}
+
+// ======================== MESSAGE LISTENER ========================
+
+function setupMessageListener() {
+    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+        if (message.target !== 'whatsapp-monitor') return;
+
+        switch (message.type) {
+            case 'get-wa-status':
+                sendResponse({
+                    enabled: waIsEnabled,
+                    processedCount: processedLinks.size,
+                    totalFound: linkCount,
+                    isMonitoring: waObserver !== null,
+                });
+                break;
+
+            case 'toggle-wa-monitor':
+                waIsEnabled = message.data?.enabled ?? !waIsEnabled;
+                waLog(`Monitor ${waIsEnabled ? 'ENABLED ✅' : 'DISABLED ❌'}`);
+                sendResponse({ enabled: waIsEnabled });
+                break;
+
+            case 'force-scan':
+                const links = scanForProlificLinks();
+                processNewLinks(links);
+                sendResponse({ found: links.length });
+                break;
+        }
+    });
+}
+
+// ======================== STATUS INDICATOR ========================
+
+function addWAStatusIndicator() {
+    const indicator = document.createElement('div');
+    indicator.id = 'prolific-wa-indicator';
+    indicator.innerHTML = '📱';
+    indicator.title = 'Prolific WhatsApp Monitor Active';
+    indicator.style.cssText = `
+        position: fixed;
+        bottom: 10px;
+        left: 10px;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: rgba(37, 211, 102, 0.9);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        z-index: 999999;
+        cursor: pointer;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        transition: all 0.3s ease;
+        animation: wa-pulse 2s infinite;
+    `;
+
+    if (!document.getElementById('prolific-wa-indicator-styles')) {
+        const style = document.createElement('style');
+        style.id = 'prolific-wa-indicator-styles';
+        style.textContent = `
+            @keyframes wa-pulse {
+                0%, 100% { box-shadow: 0 2px 8px rgba(37, 211, 102, 0.3); }
+                50% { box-shadow: 0 2px 16px rgba(37, 211, 102, 0.6); }
+            }
+            #prolific-wa-indicator:hover {
+                transform: scale(1.2);
+            }
+            #prolific-wa-indicator.disabled {
+                background: rgba(150, 150, 150, 0.9);
+                animation: none;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    indicator.addEventListener('click', () => {
+        waIsEnabled = !waIsEnabled;
+        indicator.classList.toggle('disabled', !waIsEnabled);
+        indicator.title = waIsEnabled
+            ? `Prolific Monitor Active (${linkCount} links found)`
+            : 'Prolific Monitor Disabled (click to enable)';
+        waLog(`Monitor toggled: ${waIsEnabled}`);
+    });
+
+    document.body.appendChild(indicator);
+}
+
+// ======================== INITIALIZATION ========================
+
+function initWAMonitor() {
+    waLog('🚀 Initializing WhatsApp Prolific Monitor...');
+    waLog(`📍 URL: ${window.location.href}`);
+
+    // Load previously processed links
+    loadProcessedLinks();
+
+    // Setup all monitoring mechanisms
+    setupMessageListener();
+    setupWAObserver();
+    waStartPolling();
+    addWAStatusIndicator();
+
+    // Initial scan and grace period for initial DOM rendering
+    setTimeout(() => {
+        const links = scanForProlificLinks();
+        waLog(`📊 Initial scan: ${links.length} Prolific links found`);
+        // On first load, don't auto-open old links - just mark them
+        links.forEach(link => {
+            const studyId = extractStudyId(link);
+            if (studyId) processedLinks.add(studyId);
+        });
+        
+        // End initial load phase after WhatsApp has had time to render old messages
+        setTimeout(() => {
+            isInitialLoad = false;
+            waLog('✅ Initial load phase completed. Auto-open is now active.');
+        }, 5000); // 5 seconds is enough to allow old messages to render
+    }, 2000);
+
+    waLog('✅ WhatsApp Monitor active!');
+    waLog('   - MutationObserver: ON');
+    waLog(`   - Polling (${WA_CONFIG.SCAN_INTERVAL}ms): ON`);
+    waLog('   - Link detection: ON');
+}
+
+// ======================== BACKGROUND COMMUNICATION ========================
+
+function waNotifyBg(type: string, data?: any) {
+    try {
+        chrome.runtime.sendMessage({
+            target: 'background',
+            type: type,
+            data: data,
+        });
+    } catch (e) {
+        waLog('⚠️ Could not notify background:', e);
+    }
+}
+
+// Start when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initWAMonitor);
+} else {
+    // WhatsApp Web loads dynamically, wait a bit for the app to initialize
+    setTimeout(initWAMonitor, 3000);
+}
+/**
+ * Prolific Study Scraper
+ * Runs on third-party study sites to find the completion code early.
+ */
+
+// Only run on pages that have PROLIFIC_PID in the URL
+const isStudyPage = window.location.href.includes('PROLIFIC_PID=');
+const isExcluded = window.location.hostname.includes('prolific.com') || window.location.hostname.includes('whatsapp.com');
+
+if (isStudyPage && !isExcluded) {
+    console.log('[Prolific Scraper] Active on study page:', window.location.hostname);
+    
+    // Pattern to find 8-character alphanumeric completion codes
+    // Matches: cc=C1379C4O, Completion code: C1379C4O, etc.
+    const codeRegex = /(?:cc=|completion\s*code\s*[:=]\s*|\"completionCode\"\s*:\s*\")([A-Z0-9]{8})(?![\w])/i;
+    let foundCode: string | null = null;
+    let uiInjected = false;
+
+    // Scan function
+    const scanForCode = () => {
+        if (foundCode) return;
+
+        // 1. Check URL parameters just in case it redirects with it
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('cc')) {
+            foundCode = urlParams.get('cc');
+        }
+
+        // 2. Check full HTML source (this catches inline script variables like redirect_urls)
+        if (!foundCode) {
+            const html = document.documentElement.innerHTML;
+            const match = html.match(codeRegex);
+            if (match && match[1]) {
+                foundCode = match[1].toUpperCase();
+            }
+        }
+
+        if (foundCode && !uiInjected) {
+            console.log('[Prolific Scraper] Found Completion Code:', foundCode);
+            injectUI(foundCode);
+            uiInjected = true;
+        }
+    };
+
+    // Run initial scan
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', scanForCode);
+    } else {
+        scanForCode();
+    }
+
+    // Run scan periodically in case of dynamic loading or SPA routing
+    setInterval(scanForCode, 2000);
+
+    // Also observe DOM changes
+    const observer = new MutationObserver(() => scanForCode());
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+
+    // UI Injection
+    function injectUI(code: string) {
+        const container = document.createElement('div');
+        container.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: linear-gradient(135deg, #1e3a8a, #2563eb);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(37, 99, 235, 0.4);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 15px;
+            font-weight: 600;
+            z-index: 2147483647;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            transition: all 0.3s ease;
+            cursor: default;
+        `;
+
+        const textDiv = document.createElement('div');
+        textDiv.innerHTML = `🎯 Prolific Code:<br><span style="font-size: 20px; font-weight: 800; letter-spacing: 2px; color: #facc15;">${code}</span>`;
+        
+        const copyBtn = document.createElement('button');
+        copyBtn.textContent = 'COPY';
+        copyBtn.style.cssText = `
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        `;
+        
+        copyBtn.onmouseover = () => { copyBtn.style.background = 'rgba(255, 255, 255, 0.3)'; };
+        copyBtn.onmouseout = () => { copyBtn.style.background = 'rgba(255, 255, 255, 0.2)'; };
+        
+        copyBtn.onclick = () => {
+            navigator.clipboard.writeText(code).then(() => {
+                copyBtn.textContent = 'COPIED!';
+                copyBtn.style.background = '#22c55e';
+                copyBtn.style.borderColor = '#22c55e';
+                setTimeout(() => {
+                    copyBtn.textContent = 'COPY';
+                    copyBtn.style.background = 'rgba(255, 255, 255, 0.2)';
+                    copyBtn.style.borderColor = 'rgba(255, 255, 255, 0.4)';
+                }, 2000);
+            });
+        };
+
+        const closeBtn = document.createElement('div');
+        closeBtn.innerHTML = '×';
+        closeBtn.style.cssText = `
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            background: #ef4444;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        `;
+        closeBtn.onclick = () => container.remove();
+
+        container.appendChild(textDiv);
+        container.appendChild(copyBtn);
+        container.appendChild(closeBtn);
+        document.body.appendChild(container);
+    }
+}

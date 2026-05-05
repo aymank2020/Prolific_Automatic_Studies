@@ -164,6 +164,41 @@ function setupForceCheck() {
         }));
     });
 }
+// ======================== AI AUTO-SOLVER CONTROLS ========================
+function setupAISettings() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const aiEnabled = document.getElementById("aiEnabled");
+        const aiSettingsGroup = document.getElementById("aiSettingsGroup");
+        const aiApiKey = document.getElementById("aiApiKey");
+        const aiBaseUrl = document.getElementById("aiBaseUrl");
+        const aiModel = document.getElementById("aiModel");
+        if (!aiEnabled || !aiSettingsGroup || !aiApiKey || !aiBaseUrl || !aiModel)
+            return;
+        // Load saved settings
+        const result = yield chrome.storage.sync.get(["aiEnabled", "aiApiKey", "aiBaseUrl", "aiModel"]);
+        aiEnabled.checked = result["aiEnabled"] === true;
+        aiSettingsGroup.style.display = aiEnabled.checked ? "block" : "none";
+        if (result["aiApiKey"])
+            aiApiKey.value = result["aiApiKey"];
+        aiBaseUrl.value = result["aiBaseUrl"] || "https://api.openai.com/v1";
+        if (result["aiModel"])
+            aiModel.value = result["aiModel"];
+        // Event listeners
+        aiEnabled.addEventListener("change", () => __awaiter(this, void 0, void 0, function* () {
+            yield chrome.storage.sync.set({ ["aiEnabled"]: aiEnabled.checked });
+            aiSettingsGroup.style.display = aiEnabled.checked ? "block" : "none";
+        }));
+        aiApiKey.addEventListener("input", () => __awaiter(this, void 0, void 0, function* () {
+            yield chrome.storage.sync.set({ ["aiApiKey"]: aiApiKey.value });
+        }));
+        aiBaseUrl.addEventListener("input", () => __awaiter(this, void 0, void 0, function* () {
+            yield chrome.storage.sync.set({ ["aiBaseUrl"]: aiBaseUrl.value });
+        }));
+        aiModel.addEventListener("change", () => __awaiter(this, void 0, void 0, function* () {
+            yield chrome.storage.sync.set({ ["aiModel"]: aiModel.value });
+        }));
+    });
+}
 // ======================== HISTORY ========================
 function loadHistory() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -298,6 +333,7 @@ document.addEventListener('DOMContentLoaded', function () {
         // New auto-reserve controls
         yield setupAutoReserve();
         yield setupForceCheck();
+        yield setupAISettings();
         // Live status updates
         updateStatus();
         setInterval(updateStatus, 3000);

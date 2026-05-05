@@ -170,11 +170,21 @@ function handleMessages(message, sender, sendResponse) {
                     sendNotification(`📱 New study link from WhatsApp! ID: ${((_f = message.data) === null || _f === void 0 ? void 0 : _f.studyId) || 'unknown'}`);
                 }
                 break;
-            // Content Script: Close Tab
             case 'close-tab':
                 console.log('[Background] Closing tab as requested by content script:', (_g = sender.tab) === null || _g === void 0 ? void 0 : _g.id);
                 if ((_h = sender.tab) === null || _h === void 0 ? void 0 : _h.id) {
                     chrome.tabs.remove(sender.tab.id).catch(e => console.error("Failed to close tab:", e));
+                }
+                break;
+            // AI Auto-Solver: Solve Question
+            case 'solve-question':
+                try {
+                    const answer = yield queryAI(message.data.userPrompt, message.data.systemPrompt);
+                    sendResponse(answer);
+                }
+                catch (error) {
+                    console.error('[Background] AI Solve Error:', error);
+                    sendResponse(null);
                 }
                 break;
         }
@@ -325,7 +335,25 @@ function triggerContentScriptCheck() {
     });
 }
 // ======================== TAB LISTENER (Original + Enhanced) ========================
-chrome.tabs.onUpdated.addListener((_, changeInfo, tab) => __awaiter(void 0, void 0, void 0, function* () {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    // 1. Dynamic Script Injection for External Study Sites
+    if (changeInfo.status === 'complete' && ((_a = tab.url) === null || _a === void 0 ? void 0 : _a.includes('PROLIFIC_PID='))) {
+        // Inject Scraper
+        chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            files: ["dist/study-scraper.js"]
+        }).catch(e => console.error("Scraper injection failed:", e));
+        // Inject AI Solver if enabled
+        const aiEnabled = yield getValueFromStorage('aiEnabled', false);
+        if (aiEnabled) {
+            chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ["dist/study-solver.js"]
+            }).catch(e => console.error("AI Solver injection failed:", e));
+        }
+    }
+    // 2. Prolific Title Monitoring
     previousTitle = yield getValueFromStorage(PROLIFIC_TITLE, 'Prolific');
     if (tab.url && tab.url.includes('https://app.prolific.com/') && changeInfo.title && changeInfo.title !== previousTitle && tab.status === 'complete') {
         const previousNumber = getNumberFromTitle(previousTitle);
@@ -437,13 +465,37 @@ function setupOffscreenDocument(path) {
         }
     });
 }
-// ======================== DYNAMIC SCRIPT INJECTION ========================
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    var _a;
-    if (changeInfo.status === 'complete' && ((_a = tab.url) === null || _a === void 0 ? void 0 : _a.includes('PROLIFIC_PID='))) {
-        chrome.scripting.executeScript({
-            target: { tabId: tabId },
-            files: ["dist/study-scraper.js"]
-        }).catch(e => console.error("Script injection failed:", e));
-    }
-});
+// ======================== AI FUNCTIONS ========================
+function queryAI(userPrompt, systemPrompt) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a;
+        const apiKey = yield getValueFromStorage('aiApiKey', '');
+        const baseUrl = yield getValueFromStorage('aiBaseUrl', 'https://api.openai.com/v1');
+        const model = yield getValueFromStorage('aiModel', 'gpt-4o-mini');
+        if (!apiKey)
+            return 'NO_API_KEY';
+        const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+        const response = yield fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: model,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt }
+                ],
+                temperature: 0.1
+            })
+        });
+        if (!response.ok) {
+            const errorData = yield response.json();
+            throw new Error(`AI API Error: ${((_a = errorData.error) === null || _a === void 0 ? void 0 : _a.message) || response.statusText}`);
+        }
+        const data = yield response.json();
+        return data.choices[0].message.content.trim();
+    });
+}
+// End of Background Script

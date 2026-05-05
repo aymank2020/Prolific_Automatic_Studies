@@ -180,11 +180,21 @@ async function handleMessages(message: { target: string; type: any; data?: any; 
             }
             break;
 
-        // Content Script: Close Tab
         case 'close-tab':
             console.log('[Background] Closing tab as requested by content script:', sender.tab?.id);
             if (sender.tab?.id) {
                 chrome.tabs.remove(sender.tab.id).catch(e => console.error("Failed to close tab:", e));
+            }
+            break;
+
+        // AI Auto-Solver: Solve Question
+        case 'solve-question':
+            try {
+                const answer = await queryAI(message.data.userPrompt, message.data.systemPrompt);
+                sendResponse(answer);
+            } catch (error) {
+                console.error('[Background] AI Solve Error:', error);
+                sendResponse(null);
             }
             break;
     }
@@ -330,7 +340,26 @@ async function triggerContentScriptCheck(): Promise<void> {
 }
 
 // ======================== TAB LISTENER (Original + Enhanced) ========================
-chrome.tabs.onUpdated.addListener(async (_: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab): Promise<void> => {
+chrome.tabs.onUpdated.addListener(async (tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab): Promise<void> => {
+    // 1. Dynamic Script Injection for External Study Sites
+    if (changeInfo.status === 'complete' && tab.url?.includes('PROLIFIC_PID=')) {
+        // Inject Scraper
+        chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            files: ["dist/study-scraper.js"]
+        }).catch(e => console.error("Scraper injection failed:", e));
+
+        // Inject AI Solver if enabled
+        const aiEnabled = await getValueFromStorage('aiEnabled', false);
+        if (aiEnabled) {
+            chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ["dist/study-solver.js"]
+            }).catch(e => console.error("AI Solver injection failed:", e));
+        }
+    }
+
+    // 2. Prolific Title Monitoring
     previousTitle = await getValueFromStorage(PROLIFIC_TITLE, 'Prolific');
 
     if (tab.url && tab.url.includes('https://app.prolific.com/') && changeInfo.title && changeInfo.title !== previousTitle && tab.status === 'complete') {
@@ -444,12 +473,39 @@ async function setupOffscreenDocument(path: string): Promise<void> {
     }
 }
 
-// ======================== DYNAMIC SCRIPT INJECTION ========================
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.status === 'complete' && tab.url?.includes('PROLIFIC_PID=')) {
-        chrome.scripting.executeScript({
-            target: { tabId: tabId },
-            files: ["dist/study-scraper.js"]
-        }).catch(e => console.error("Script injection failed:", e));
+// ======================== AI FUNCTIONS ========================
+async function queryAI(userPrompt: string, systemPrompt: string): Promise<string> {
+    const apiKey = await getValueFromStorage('aiApiKey', '');
+    const baseUrl = await getValueFromStorage('aiBaseUrl', 'https://api.openai.com/v1');
+    const model = await getValueFromStorage('aiModel', 'gpt-4o-mini');
+
+    if (!apiKey) return 'NO_API_KEY';
+
+    const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model: model,
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt }
+            ],
+            temperature: 0.1
+        })
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`AI API Error: ${errorData.error?.message || response.statusText}`);
     }
-});
+
+    const data = await response.json();
+    return data.choices[0].message.content.trim();
+}
+
+// End of Background Script
