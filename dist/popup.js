@@ -37,6 +37,11 @@ document.addEventListener('DOMContentLoaded', function () {
         const openProlific = document.getElementById("openProlific");
         const donateText = document.getElementById('donateText');
         const donateImg = document.getElementById('donateImg');
+        // New auto-reserve controls
+        const autoReserve = document.getElementById("autoReserve");
+        const forceCheck = document.getElementById("forceCheck");
+        const statusText = document.getElementById("statusText");
+        const reservedCount = document.getElementById("reservedCount");
         if (donateImg && donateText) {
             donateText.addEventListener('mouseover', function () {
                 donateImg.style.visibility = 'visible';
@@ -63,8 +68,80 @@ document.addEventListener('DOMContentLoaded', function () {
         if (volume) {
             yield setVolume(volume);
         }
+        // Setup auto-reserve toggle
+        if (autoReserve) {
+            yield setAutoReserve(autoReserve);
+        }
+        // Setup force check button
+        if (forceCheck) {
+            forceCheck.addEventListener("click", () => __awaiter(this, void 0, void 0, function* () {
+                forceCheck.disabled = true;
+                forceCheck.textContent = '⏳ Checking...';
+                forceCheck.classList.remove("btn-success");
+                forceCheck.classList.add("btn-fail");
+                yield chrome.runtime.sendMessage({
+                    type: 'force-check',
+                    target: 'background',
+                });
+                setTimeout(() => {
+                    forceCheck.disabled = false;
+                    forceCheck.textContent = '🔍 Force Check';
+                    forceCheck.classList.remove("btn-fail");
+                    forceCheck.classList.add("btn-success");
+                }, 2000);
+            }));
+        }
+        // Update status display
+        yield updateStatusDisplay(statusText, reservedCount);
+        // Refresh status every 2 seconds
+        setInterval(() => __awaiter(this, void 0, void 0, function* () {
+            yield updateStatusDisplay(statusText, reservedCount);
+        }), 2000);
     });
 });
+function updateStatusDisplay(statusText, reservedCount) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a;
+        if (!statusText && !reservedCount)
+            return;
+        try {
+            // Try to get status from content script via tabs
+            const tabs = yield chrome.tabs.query({ url: "https://app.prolific.com/*" });
+            if (tabs.length > 0 && tabs[0].id) {
+                try {
+                    const response = yield chrome.tabs.sendMessage(tabs[0].id, {
+                        target: 'content-script',
+                        type: 'get-status',
+                    });
+                    if (response) {
+                        if (statusText) {
+                            statusText.textContent = response.enabled ? '🟢 Active' : '🔴 Disabled';
+                            statusText.style.color = response.enabled ? '#00c853' : '#ff1744';
+                        }
+                        if (reservedCount) {
+                            reservedCount.textContent = ((_a = response.reservedCount) === null || _a === void 0 ? void 0 : _a.toString()) || '0';
+                        }
+                    }
+                }
+                catch (e) {
+                    if (statusText) {
+                        statusText.textContent = '⚠️ Content script not loaded';
+                        statusText.style.color = '#ff9800';
+                    }
+                }
+            }
+            else {
+                if (statusText) {
+                    statusText.textContent = '⚠️ No Prolific tab open';
+                    statusText.style.color = '#ff9800';
+                }
+            }
+        }
+        catch (e) {
+            // Ignore
+        }
+    });
+}
 function setCounter(counter) {
     return __awaiter(this, void 0, void 0, function* () {
         const result = yield chrome.storage.sync.get("counter");
@@ -131,6 +208,23 @@ function setOpenProlific(openProlific) {
         openProlific.addEventListener("click", function () {
             return __awaiter(this, void 0, void 0, function* () {
                 yield chrome.storage.sync.set({ ["openProlific"]: openProlific.checked });
+            });
+        });
+    });
+}
+function setAutoReserve(autoReserve) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const result = yield chrome.storage.sync.get("autoReserveEnabled");
+        autoReserve.checked = result["autoReserveEnabled"] !== false; // Default to true
+        autoReserve.addEventListener("click", function () {
+            return __awaiter(this, void 0, void 0, function* () {
+                yield chrome.storage.sync.set({ ["autoReserveEnabled"]: autoReserve.checked });
+                // Notify background to relay to content scripts
+                yield chrome.runtime.sendMessage({
+                    type: 'toggle-auto-reserve',
+                    target: 'background',
+                    data: { enabled: autoReserve.checked },
+                });
             });
         });
     });

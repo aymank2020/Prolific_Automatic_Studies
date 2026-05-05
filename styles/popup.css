@@ -1,14 +1,12 @@
 body {
-    width: 20em;
-    height: 11em;
+    width: 22em;
+    height: auto;
     font-size: 18px;
     background-color: #e6f5f1;
-
 }
 
 .ml-1 {
     margin-left: 2rem;
-
 }
 
 .heading {
@@ -18,6 +16,7 @@ body {
     font-size: 1.3em;
     text-shadow: 2px 2px 4px #d3e6ef
 }
+
 .container-fluid {
     margin-right: auto;
     margin-left: auto;
@@ -27,6 +26,7 @@ body {
     align-items: center;
     justify-content: space-between;
 }
+
 .form-group {
     display: flex;
     align-items: center;
@@ -50,6 +50,7 @@ body {
     border-radius: 0.25rem;
     transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
 }
+
 .form-select:focus {
     border-color: #80bdff;
     outline: 0;
@@ -62,7 +63,6 @@ body {
 
 .mg-left {
     margin-left: 2rem;
-
 }
 
 #playAudio {
@@ -92,6 +92,8 @@ body {
     line-height: 1.1;
     border-radius: 0.25rem;
     transition: color 0.15s ease-in-out, background-color 0.15s ease-in-out, border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+    cursor: pointer;
+    border: none;
 }
 
 .btn-success {
@@ -100,19 +102,32 @@ body {
     border-color: #2282ad;
 }
 
+.btn-success:hover {
+    background-color: #1a6b8f;
+    border-color: #1a6b8f;
+}
 
 .links {
     text-decoration-line: none;
 }
 
 .btn-fail {
-    background-color: #5b5f5c;border-color: #5b5f5c;
+    background-color: #5b5f5c;
+    border-color: #5b5f5c;
+}
+
+.btn-small {
+    font-size: 0.85rem;
+    padding: 0.25rem 0.5rem;
+    margin-top: 0.3rem;
+    width: 100%;
 }
 
 .my-2 {
     margin-top: 0.5rem !important;
     margin-bottom: 0.5rem !important;
 }
+
 .my-1 {
     margin-top: 0.25rem !important;
     margin-bottom: 0.25rem !important;
@@ -139,10 +154,6 @@ body {
     margin-right: 0.5rem !important;
 }
 
-.my-2 {
-    margin-top: 0.5rem !important;
-    margin-bottom: 0.5rem !important;
-}
 .float-start {
     float: left;
     margin-right: 10px;
@@ -152,6 +163,7 @@ body {
     float: right;
     margin-left: 10px;
 }
+
 .imgSmall {
     width: 16px;
     height: 16px;
@@ -175,6 +187,7 @@ a::before {
     z-index: -1;
     transition: all .3s ease-in-out;
 }
+
 #donateImg {
     visibility: hidden;
 }
@@ -182,4 +195,73 @@ a::before {
 a:hover::before {
     bottom: 0;
     height: 100%;
+}
+
+/* ======================== AUTO-RESERVE SECTION ======================== */
+
+.auto-reserve-section {
+    background: linear-gradient(135deg, #e8f5e9, #c8e6c9);
+    border: 2px solid #66bb6a;
+    border-radius: 8px;
+    padding: 0.5rem 0.75rem;
+    margin: 0.5rem 1rem;
+    text-align: center;
+}
+
+.auto-reserve-section .form-check {
+    margin-bottom: 0.3rem;
+}
+
+.auto-reserve-section label {
+    font-weight: bold;
+    color: #2e7d32;
+    font-size: 0.95em;
+}
+
+.status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.85em;
+}
+
+.status-label {
+    color: #555;
+    font-weight: 500;
+}
+
+.status-value {
+    font-weight: bold;
+    color: #2e7d32;
+}
+
+.divider {
+    border: none;
+    border-top: 1px solid #ccc;
+    margin: 0.5rem 1rem;
+}
+
+/* Highlight auto-reserve checkbox */
+#autoReserve {
+    width: 18px;
+    height: 18px;
+    accent-color: #2e7d32;
+}
+
+#forceCheck {
+    background: linear-gradient(135deg, #1565c0, #1976d2);
+    border: none;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+#forceCheck:hover:not(:disabled) {
+    background: linear-gradient(135deg, #0d47a1, #1565c0);
+    transform: scale(1.02);
+}
+
+#forceCheck:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
 }

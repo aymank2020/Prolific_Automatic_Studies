@@ -1,22 +1,48 @@
 {
   "manifest_version": 3,
   "name": "Prolific Studies Notifier",
-  "version": "1.0.6",
-  "description": "Google extension for Prolific to notify you when studies are available",
+  "version": "2.0.0",
+  "description": "Auto-detect and reserve Prolific studies. Monitors WhatsApp Web groups for study links.",
 
   "permissions": [
     "storage",
     "notifications",
     "offscreen",
-    "tabs"
+    "tabs",
+    "alarms",
+    "activeTab"
   ],
+
+  "host_permissions": [
+    "https://app.prolific.com/*",
+    "https://internal-api.prolific.com/*",
+    "https://web.whatsapp.com/*"
+  ],
+
   "background": {
     "service_worker": "dist/background.js"
   },
+
+  "content_scripts": [
+    {
+      "matches": ["https://app.prolific.com/*"],
+      "js": ["dist/content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["dist/whatsapp-monitor.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+
   "action": {
     "default_popup": "popup/popup.html",
     "title": "Prolific get studies automatically"
   },
+
   "icons": {
     "16": "imgs/logo.png",
     "48": "imgs/logo.png",

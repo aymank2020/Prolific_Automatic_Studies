@@ -11,6 +11,28 @@
 
 <div class="text-align">
 
+    <!-- AUTO-RESERVE SECTION -->
+    <div class="auto-reserve-section">
+        <div class="form-check d-flex justify-content-center ml-1">
+            <input class="form-check-input me-2" type="checkbox" value="" id="autoReserve">
+            <label class="form-check-label" for="autoReserve">
+                ⚡ Auto-Reserve Studies
+            </label>
+        </div>
+        <div class="status-row">
+            <span class="status-label">Status:</span>
+            <span id="statusText" class="status-value">🔄 Loading...</span>
+        </div>
+        <div class="status-row">
+            <span class="status-label">Reserved:</span>
+            <span id="reservedCount" class="status-value">0</span>
+        </div>
+        <button id="forceCheck" class="btn btn-success btn-small" title="Force an immediate check for new studies">
+            🔍 Force Check
+        </button>
+    </div>
+
+    <hr class="divider">
 
     <div class="form-check d-flex justify-content-center ml-1">
         <input class="form-check-input me-2" type="checkbox" value="" id="openProlific">
@@ -59,7 +81,7 @@
         <a href="https://github.com/spin311/ProlificAutomaticStudies" class="float-start" target="_blank" style="margin-right: 5px">Github</a>
         <img src="/imgs/github.png" alt="GitHubLogo">
     </span>
-    <a class="my-1 links" href="https://app.prolific.com/" target="_blank">Prolific</a>
+    <a class="my-1 links" href="https://app.prolific.com/studies" target="_blank">Prolific</a>
     <span class="float-end" style="display: flex; align-items: center;">
     <a href="https://www.paypal.com/donate/?hosted_button_id=4WXEWMN3QGLGY" class="" target="_blank" id="donateText">Donate</a>
     <img src="/imgs/justAGirlSmol.png" alt="Cat" id="donateImg">

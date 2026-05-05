@@ -10,40 +10,76 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 var Reason = chrome.offscreen.Reason;
 var ContextType = chrome.runtime.ContextType;
+// ======================== CONSTANTS ========================
 const AUDIO_ACTIVE = "audioActive";
 const SHOW_NOTIFICATION = "showNotification";
 const OPEN_PROLIFIC = "openProlific";
 const AUDIO = "audio";
 const VOLUME = "volume";
 const COUNTER = "counter";
+const AUTO_RESERVE = "autoReserveEnabled";
 const ICON_URL = 'imgs/logo.png';
 const TITLE = 'Prolific Automatic Studies';
 const MESSAGE = 'A new study has been posted on Prolific!';
 const PROLIFIC_TITLE = 'prolificTitle';
-let creating; // A global promise to avoid concurrency issues
+// ======================== STATE ========================
+let creating;
 let volume;
 let audio;
 let shouldSendNotification;
 let shouldPlayAudio;
 let previousTitle;
+// ======================== API POLLING (Background) ========================
+const API_BASE = 'https://internal-api.prolific.com/api/v1';
+const POLL_ALARM_NAME = 'prolific-api-poll';
+const FAST_POLL_ALARM_NAME = 'prolific-fast-poll';
+// ======================== MESSAGE HANDLERS ========================
 chrome.runtime.onMessage.addListener(handleMessages);
 chrome.notifications.onClicked.addListener(function (notificationId) {
-    chrome.tabs.create({ url: "https://app.prolific.com/", active: true });
+    chrome.tabs.create({ url: "https://app.prolific.com/studies", active: true });
     chrome.notifications.clear(notificationId);
 });
 chrome.notifications.onButtonClicked.addListener(function (notificationId, buttonIndex) {
     if (buttonIndex === 0) {
-        chrome.tabs.create({ url: "https://app.prolific.com/", active: true });
+        chrome.tabs.create({ url: "https://app.prolific.com/studies", active: true });
     }
     chrome.notifications.clear(notificationId);
 });
+// ======================== INSTALLATION ========================
 chrome.runtime.onInstalled.addListener((details) => __awaiter(void 0, void 0, void 0, function* () {
     if (details.reason === "install") {
         yield setInitialValues();
         yield new Promise(resolve => setTimeout(resolve, 1000));
         yield chrome.tabs.create({ url: "https://spin311.github.io/ProlificAutomaticStudies/", active: true });
     }
+    // Set up alarms for periodic checking
+    setupAlarms();
 }));
+// ======================== STARTUP ========================
+chrome.runtime.onStartup.addListener(function () {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (yield getValueFromStorage(OPEN_PROLIFIC, false)) {
+            yield chrome.tabs.create({ url: "https://app.prolific.com/studies", active: false });
+        }
+        setupAlarms();
+    });
+});
+// ======================== ALARMS ========================
+function setupAlarms() {
+    // Regular poll every 30 seconds
+    chrome.alarms.create(POLL_ALARM_NAME, {
+        periodInMinutes: 0.5, // 30 seconds
+    });
+}
+chrome.alarms.onAlarm.addListener((alarm) => __awaiter(void 0, void 0, void 0, function* () {
+    if (alarm.name === POLL_ALARM_NAME) {
+        yield checkProlificTab();
+    }
+    if (alarm.name === FAST_POLL_ALARM_NAME) {
+        yield triggerContentScriptCheck();
+    }
+}));
+// ======================== UTILITY FUNCTIONS ========================
 function getValueFromStorage(key, defaultValue) {
     return new Promise((resolve) => {
         chrome.storage.sync.get(key, function (result) {
@@ -55,13 +91,13 @@ function getNumberFromTitle(title) {
     const match = title.match(/\((\d+)\)/);
     return match ? parseInt(match[1]) : 0;
 }
+// ======================== MESSAGE HANDLER ========================
 function handleMessages(message) {
     return __awaiter(this, void 0, void 0, function* () {
-        // Return early if this message isn't meant for the offscreen document.
+        var _a, _b, _c, _d, _e;
         if (message.target !== 'background') {
             return;
         }
-        // Dispatch the message to an appropriate handler.
         switch (message.type) {
             case 'play-sound':
                 audio = yield getValueFromStorage(AUDIO, 'alert1.mp3');
@@ -75,16 +111,215 @@ function handleMessages(message) {
             case 'clear-badge':
                 yield chrome.action.setBadgeText({ text: '' });
                 break;
+            // New: Study detected by content script
+            case 'studies-detected':
+                console.log('[Background] Studies detected:', message.data);
+                yield handleStudiesDetected(message.data);
+                break;
+            // New: Study reserved by content script
+            case 'study-reserved':
+                console.log('[Background] Study reserved:', message.data);
+                yield handleStudyReserved(message.data);
+                break;
+            // New: Toggle auto-reserve
+            case 'toggle-auto-reserve':
+                const enabled = (_b = (_a = message.data) === null || _a === void 0 ? void 0 : _a.enabled) !== null && _b !== void 0 ? _b : true;
+                yield chrome.storage.sync.set({ [AUTO_RESERVE]: enabled });
+                // Forward to content script
+                yield broadcastToContentScripts({
+                    target: 'content-script',
+                    type: 'toggle-auto-reserve',
+                    data: { enabled },
+                });
+                break;
+            // New: Force check from popup
+            case 'force-check':
+                yield triggerContentScriptCheck();
+                break;
+            // New: Get status from content scripts
+            case 'get-status':
+                // This will be handled via sendResponse in the listener
+                break;
+            // WhatsApp: Open study link from WhatsApp monitor
+            case 'open-study-link':
+                console.log('[Background] Opening study from WhatsApp:', (_c = message.data) === null || _c === void 0 ? void 0 : _c.url);
+                if ((_d = message.data) === null || _d === void 0 ? void 0 : _d.url) {
+                    yield chrome.tabs.create({ url: message.data.url, active: true });
+                    // Play sound alert
+                    shouldPlayAudio = yield getValueFromStorage(AUDIO_ACTIVE, true);
+                    if (shouldPlayAudio) {
+                        audio = yield getValueFromStorage(AUDIO, 'alert1.mp3');
+                        volume = (yield getValueFromStorage(VOLUME, 100)) / 100;
+                        yield playAudio(audio, volume);
+                    }
+                    // Send notification
+                    sendNotification(`📱 Study from WhatsApp! Opening: ${message.data.studyId || 'unknown'}`);
+                }
+                break;
+            // WhatsApp: Study found notification
+            case 'whatsapp-study-found':
+                console.log('[Background] WhatsApp study found:', message.data);
+                shouldSendNotification = yield getValueFromStorage(SHOW_NOTIFICATION, true);
+                if (shouldSendNotification) {
+                    sendNotification(`📱 New study link from WhatsApp! ID: ${((_e = message.data) === null || _e === void 0 ? void 0 : _e.studyId) || 'unknown'}`);
+                }
+                break;
         }
     });
 }
-chrome.runtime.onStartup.addListener(function () {
+// ======================== STUDY HANDLERS ========================
+function handleStudiesDetected(data) {
     return __awaiter(this, void 0, void 0, function* () {
-        if (yield getValueFromStorage(OPEN_PROLIFIC, false)) {
-            yield chrome.tabs.create({ url: "https://app.prolific.com/", active: false });
+        shouldSendNotification = yield getValueFromStorage(SHOW_NOTIFICATION, true);
+        if (shouldSendNotification) {
+            sendNotification((data === null || data === void 0 ? void 0 : data.count) ? `${data.count} studies available!` : undefined);
+        }
+        shouldPlayAudio = yield getValueFromStorage(AUDIO_ACTIVE, true);
+        if (shouldPlayAudio) {
+            audio = yield getValueFromStorage(AUDIO, 'alert1.mp3');
+            volume = (yield getValueFromStorage(VOLUME, 100)) / 100;
+            yield playAudio(audio, volume);
+        }
+        // Update badge
+        if (data === null || data === void 0 ? void 0 : data.count) {
+            yield updateBadge(data.count);
+        }
+        // Bring Prolific tab to front
+        yield focusProlificTab();
+    });
+}
+function handleStudyReserved(data) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const count = (data === null || data === void 0 ? void 0 : data.count) || 1;
+        yield updateCounterAndBadge(count);
+        // Send success notification
+        chrome.notifications.create({
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL(ICON_URL),
+            title: '🎉 Study Reserved!',
+            message: `Successfully reserved ${count} study/studies!`,
+            buttons: [{ title: 'Open Prolific' }, { title: 'Dismiss' }],
+        });
+        // Play success sound
+        shouldPlayAudio = yield getValueFromStorage(AUDIO_ACTIVE, true);
+        if (shouldPlayAudio) {
+            audio = yield getValueFromStorage(AUDIO, 'alert1.mp3');
+            volume = (yield getValueFromStorage(VOLUME, 100)) / 100;
+            yield playAudio(audio, volume);
         }
     });
-});
+}
+// ======================== PROLIFIC TAB MANAGEMENT ========================
+/**
+ * Find the active Prolific tab
+ */
+function findProlificTab() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const tabs = yield chrome.tabs.query({ url: "https://app.prolific.com/*" });
+        return tabs.length > 0 ? tabs[0] : null;
+    });
+}
+/**
+ * Focus the Prolific tab
+ */
+function focusProlificTab() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const tab = yield findProlificTab();
+        if (tab && tab.id) {
+            try {
+                yield chrome.tabs.update(tab.id, { active: true });
+                if (tab.windowId) {
+                    yield chrome.windows.update(tab.windowId, { focused: true });
+                }
+            }
+            catch (e) {
+                console.log('[Background] Could not focus tab:', e);
+            }
+        }
+    });
+}
+/**
+ * Check the Prolific tab status periodically
+ */
+function checkProlificTab() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const tab = yield findProlificTab();
+        if (!tab)
+            return;
+        // If the tab title indicates studies available, trigger notification
+        if (tab.title) {
+            const currentNumber = getNumberFromTitle(tab.title);
+            if (currentNumber > 0) {
+                console.log(`[Background] Alarm check: ${currentNumber} studies detected from title`);
+                yield handleStudiesDetected({ count: currentNumber, source: 'alarm' });
+            }
+        }
+    });
+}
+/**
+ * Send a message to all content scripts on Prolific tabs
+ */
+function broadcastToContentScripts(message) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const tabs = yield chrome.tabs.query({ url: "https://app.prolific.com/*" });
+        for (const tab of tabs) {
+            if (tab.id) {
+                try {
+                    yield chrome.tabs.sendMessage(tab.id, message);
+                }
+                catch (e) {
+                    // Content script may not be ready
+                }
+            }
+        }
+    });
+}
+/**
+ * Trigger content script to check for studies immediately
+ */
+function triggerContentScriptCheck() {
+    return __awaiter(this, void 0, void 0, function* () {
+        yield broadcastToContentScripts({
+            target: 'content-script',
+            type: 'force-check',
+        });
+    });
+}
+// ======================== TAB LISTENER (Original + Enhanced) ========================
+chrome.tabs.onUpdated.addListener((_, changeInfo, tab) => __awaiter(void 0, void 0, void 0, function* () {
+    previousTitle = yield getValueFromStorage(PROLIFIC_TITLE, 'Prolific');
+    if (tab.url && tab.url.includes('https://app.prolific.com/') && changeInfo.title && changeInfo.title !== previousTitle && tab.status === 'complete') {
+        const previousNumber = getNumberFromTitle(previousTitle);
+        const currentNumber = getNumberFromTitle(changeInfo.title);
+        yield chrome.storage.sync.set({ [PROLIFIC_TITLE]: changeInfo.title });
+        if (changeInfo.title.trim() !== 'Prolific' && currentNumber > previousNumber) {
+            shouldSendNotification = yield getValueFromStorage(SHOW_NOTIFICATION, true);
+            if (shouldSendNotification) {
+                sendNotification();
+            }
+            shouldPlayAudio = yield getValueFromStorage(AUDIO_ACTIVE, true);
+            if (shouldPlayAudio) {
+                audio = yield getValueFromStorage(AUDIO, 'alert1.mp3');
+                volume = (yield getValueFromStorage(VOLUME, 100)) / 100;
+                yield playAudio(audio, volume);
+            }
+            yield updateCounterAndBadge(currentNumber - previousNumber);
+            // NEW: Also trigger content script to try auto-reserving
+            if (tab.id) {
+                try {
+                    yield chrome.tabs.sendMessage(tab.id, {
+                        target: 'content-script',
+                        type: 'try-reserve',
+                    });
+                }
+                catch (e) {
+                    console.log('[Background] Content script not ready');
+                }
+            }
+        }
+    }
+}));
+// ======================== AUDIO ========================
 function playAudio() {
     return __awaiter(this, arguments, void 0, function* (audio = 'alert1.mp3', volume = 1.0) {
         yield setupOffscreenDocument('audio/audio.html');
@@ -99,47 +334,17 @@ function playAudio() {
         });
     });
 }
-chrome.tabs.onUpdated.addListener((_, changeInfo, tab) => __awaiter(void 0, void 0, void 0, function* () {
-    previousTitle = yield getValueFromStorage(PROLIFIC_TITLE, 'Prolific');
-    if (tab.url && tab.url.includes('https://app.prolific.com/') && changeInfo.title && changeInfo.title !== previousTitle && tab.status === 'complete') {
-        const previousNumber = getNumberFromTitle(previousTitle);
-        const currentNumber = getNumberFromTitle(changeInfo.title);
-        yield chrome.storage.sync.set({ [PROLIFIC_TITLE]: changeInfo.title });
-        if (changeInfo.title.trim() !== 'Prolific' && currentNumber > previousNumber) {
-            const match = changeInfo.title.match(/\((\d+)\)/);
-            shouldSendNotification = yield getValueFromStorage(SHOW_NOTIFICATION, true);
-            if (shouldSendNotification) {
-                sendNotification();
-            }
-            shouldPlayAudio = yield getValueFromStorage(AUDIO_ACTIVE, true);
-            if (shouldPlayAudio) {
-                audio = yield getValueFromStorage(AUDIO, 'alert1.mp3');
-                volume = (yield getValueFromStorage(VOLUME, 100)) / 100;
-                yield playAudio(audio, volume);
-            }
-            yield updateCounterAndBadge(currentNumber - previousNumber);
-        }
-    }
-}));
-function setInitialValues() {
-    return __awaiter(this, void 0, void 0, function* () {
-        yield Promise.all([
-            chrome.storage.sync.set({ [AUDIO_ACTIVE]: true }),
-            chrome.storage.sync.set({ [AUDIO]: "alert1.mp3" }),
-            chrome.storage.sync.set({ [SHOW_NOTIFICATION]: true }),
-            chrome.storage.sync.set({ [VOLUME]: 100 }),
-        ]);
-    });
-}
-function sendNotification() {
+// ======================== NOTIFICATIONS ========================
+function sendNotification(customMessage) {
     chrome.notifications.create({
         type: 'basic',
         iconUrl: chrome.runtime.getURL(ICON_URL),
         title: TITLE,
-        message: MESSAGE,
+        message: customMessage || MESSAGE,
         buttons: [{ title: 'Open Prolific' }, { title: 'Dismiss' }],
     });
 }
+// ======================== BADGE ========================
 function updateBadge(counter) {
     return __awaiter(this, void 0, void 0, function* () {
         yield chrome.action.setBadgeText({ text: counter.toString() });
@@ -156,10 +361,21 @@ function updateCounterAndBadge() {
         yield updateBadge(count);
     });
 }
+// ======================== STORAGE ========================
+function setInitialValues() {
+    return __awaiter(this, void 0, void 0, function* () {
+        yield Promise.all([
+            chrome.storage.sync.set({ [AUDIO_ACTIVE]: true }),
+            chrome.storage.sync.set({ [AUDIO]: "alert1.mp3" }),
+            chrome.storage.sync.set({ [SHOW_NOTIFICATION]: true }),
+            chrome.storage.sync.set({ [VOLUME]: 100 }),
+            chrome.storage.sync.set({ [AUTO_RESERVE]: true }),
+        ]);
+    });
+}
+// ======================== OFFSCREEN DOCUMENT ========================
 function setupOffscreenDocument(path) {
     return __awaiter(this, void 0, void 0, function* () {
-        // Check all windows controlled by the service worker to see if one
-        // of them is the offscreen document with the given path
         const offscreenUrl = chrome.runtime.getURL(path);
         const existingContexts = yield chrome.runtime.getContexts({
             contextTypes: [ContextType.OFFSCREEN_DOCUMENT],
