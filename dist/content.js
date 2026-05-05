@@ -69,6 +69,10 @@ let pollTimer = null;
 let observer = null;
 let startTime = Date.now();
 function log(...args) { console.log(CONFIG.LOG_PREFIX, ...args); }
+function isTargetPage() {
+    // Only run aggressively on the studies page or individual study pages
+    return window.location.pathname.startsWith('/studies');
+}
 // ======================== 404 & ERROR HANDLING ========================
 function check404AndRedirect() {
     var _a;
@@ -148,11 +152,12 @@ function tryAutoReserve() {
         const id = getStudyIdFromUrl() || `btn-${clicked}`;
         if (reservedStudyIds.has(id))
             continue;
-        log(`🎯 Clicking: "${(_a = btn.textContent) === null || _a === void 0 ? void 0 : _a.trim()}" for study ${id}`);
+        log(`🎯 Clicking reserve button: "${(_a = btn.textContent) === null || _a === void 0 ? void 0 : _a.trim()}"`);
         try {
             // Multiple click methods for React compatibility
+            btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
             btn.click();
-            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
             btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
             btn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
             reservedStudyIds.add(id);
@@ -161,6 +166,25 @@ function tryAutoReserve() {
         }
         catch (e) {
             log('❌ Click error:', e);
+        }
+    }
+    // If we didn't find the 'Take part' button directly, try clicking a study card first
+    if (clicked === 0) {
+        const cards = findStudyCards();
+        for (const card of cards) {
+            const h = card;
+            // Don't click if we already know it
+            if (!h.dataset.botClicked) {
+                log(`🖱️ Clicking study card to reveal reserve button...`);
+                try {
+                    h.click();
+                    h.dataset.botClicked = "true";
+                    // We return 0 here because we haven't reserved it yet. 
+                    // Fast polling will catch the 'Take part' button when it renders.
+                }
+                catch (e) { }
+                break; // Only click one at a time
+            }
         }
     }
     if (clicked > 0) {
@@ -190,6 +214,8 @@ function findStudyCards() {
 }
 // ======================== STUDY DETECTION ========================
 function onStudyDetected(source) {
+    if (!isTargetPage())
+        return;
     log(`🔔 Study detected via ${source}!`);
     // Check for errors first
     if (checkStudyFull())
@@ -201,7 +227,12 @@ function onStudyDetected(source) {
     else {
         startFastPolling();
     }
-    notifyBg('studies-detected', { source, count: findStudyCards().length });
+    // Only notify if we haven't already notified for this exact study count, to prevent spam
+    const currentCount = findStudyCards().length;
+    if (currentCount > lastStudyCount) {
+        notifyBg('studies-detected', { source, count: currentCount });
+        lastStudyCount = currentCount;
+    }
 }
 function startFastPolling() {
     const end = Date.now() + CONFIG.FAST_POLL_DURATION;
@@ -257,6 +288,8 @@ function setupObserver() {
             if (debounce)
                 clearTimeout(debounce);
             debounce = setTimeout(() => {
+                if (!isTargetPage())
+                    return;
                 if (!check404AndRedirect())
                     onStudyDetected('mutation');
             }, CONFIG.MUTATION_DEBOUNCE);
@@ -288,7 +321,7 @@ function interceptFetch() {
                                 newCount++;
                             }
                         }
-                        if (newCount > 0)
+                        if (newCount > 0 && isTargetPage())
                             onStudyDetected('api-fetch');
                     }
                 }
@@ -323,7 +356,7 @@ function interceptXHR() {
                                 n++;
                             }
                         }
-                        if (n > 0)
+                        if (n > 0 && isTargetPage())
                             onStudyDetected('api-xhr');
                     }
                 }
@@ -360,7 +393,7 @@ function setupNavMonitor() {
 }
 function setupAutoRefresh() {
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
+        if (document.visibilityState === 'visible' && isTargetPage()) {
             log('👁️ Tab visible, checking...');
             if (!check404AndRedirect() && !checkStudyFull())
                 onStudyDetected('visibility');
@@ -443,6 +476,12 @@ function addIndicator() {
 // ======================== INIT ========================
 function init() {
     log('🚀 Initializing v2...');
+    // Check if we are on the correct page (ignore side tabs like settings, account)
+    if (!isTargetPage()) {
+        log('⏸️ Not on /studies page, bot sleeping to prevent interference.');
+        setupNavMonitor(); // Only monitor navigation so we can wake up if they go to /studies
+        return;
+    }
     // Immediate: check for 404
     if (check404AndRedirect())
         return;
