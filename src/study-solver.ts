@@ -1,173 +1,190 @@
 /**
  * Prolific Study Solver - AI-Assisted Survey Answering
- * Runs on external study sites to identify questions and provide AI-generated answers.
  */
+// @ts-ignore: Isolated scope
 
 const SOLVER_CONFIG = {
-    LOG_PREFIX: '🤖 [Prolific Solver]',
-    SCAN_INTERVAL: 3000,
-    HUMAN_DELAY_MIN: 2000,
-    HUMAN_DELAY_MAX: 5000,
+    LOG_PREFIX: '🤖 [AI Solver]',
+    DEBOUNCE_TIME: 1500,
+    ANSWER_DELAY_MIN: 2000,
+    ANSWER_DELAY_MAX: 5000,
     NEXT_DELAY_MIN: 1000,
     NEXT_DELAY_MAX: 3000,
 };
 
-function solverLog(...args: any[]) {
-    console.log(SOLVER_CONFIG.LOG_PREFIX, ...args);
+let isSolving = false;
+let solvedQuestions = new Set<string>();
+let solverObserver: MutationObserver | null = null;
+
+function solverLog(...args: any[]) { console.log(SOLVER_CONFIG.LOG_PREFIX, ...args); }
+
+function getQuestionId(): string {
+    // Generate a semi-unique ID for the current question view
+    return window.location.href + '#' + (document.querySelector('.QuestionText, .question-text, legend')?.textContent?.substring(0, 50) || Date.now());
 }
 
-// ======================== EXTRACTION ========================
+function extractQuestionAndOptions(): { question: string, options: string[] } | null {
+    // Robust extraction to prevent mixing question and options
+    const questionEl = document.querySelector('fieldset > legend, .QuestionText, .question-text, .q-text, h1, h2');
+    if (!questionEl) return null;
 
-interface ExtractedQuestion {
-    question: string;
-    options: string[];
-    container: HTMLElement;
-}
+    const question = questionEl.textContent?.trim() || '';
+    if (!question || question.length < 5) return null;
 
-/**
- * Attempt to extract the main question and its options from the current view
- */
-function extractQuestionAndOptions(): ExtractedQuestion | null {
-    // 1. Find common question containers (Qualtrics, Gorilla, etc.)
-    const questionContainers = document.querySelectorAll('.QuestionOuter, .question-container, fieldset, .QuestionBody');
+    const options: string[] = [];
+    // Target inputs to find their associated labels
+    const inputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');
     
-    for (const container of Array.from(questionContainers)) {
-        const hContainer = container as HTMLElement;
-        
-        // Skip already solved or hidden containers
-        if (hContainer.dataset.aiSolved === 'true' || hContainer.offsetParent === null) continue;
-
-        // Try to find the question text
-        const questionEl = hContainer.querySelector('.QuestionText, legend, label, .question-text, .q-text');
-        if (!questionEl) continue;
-
-        const question = questionEl.textContent?.trim() || '';
-        if (question.length < 5) continue;
-
-        // Try to find options (radio buttons, checkboxes, buttons)
-        const optionEls = hContainer.querySelectorAll('input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"], .ChoiceStructure label, .choice-label');
-        
-        const options: string[] = [];
-        const seenTexts = new Set<string>();
-
-        optionEls.forEach(el => {
-            const label = el.closest('label') || el.parentElement;
-            const text = label?.textContent?.trim() || '';
-            if (text && !seenTexts.has(text)) {
-                options.push(text);
-                seenTexts.add(text);
-            }
-        });
-
-        if (options.length >= 2) {
-            return { question, options, container: hContainer };
+    inputs.forEach(input => {
+        const label = input.closest('label') || input.parentElement;
+        const text = label?.textContent?.trim();
+        if (text && text.length > 0) {
+            options.push(text);
         }
+    });
+
+    // If no radio/checkbox found, check for button-style choices (Gorilla/Typeform)
+    if (options.length === 0) {
+        const buttons = document.querySelectorAll('button.choice, .ChoiceStructure label, .choice-label');
+        buttons.forEach(btn => {
+            const text = btn.textContent?.trim();
+            if (text) options.push(text);
+        });
     }
 
-    // Fallback: If no container found, try looking for any visible text that looks like a question
-    return null;
+    return options.length >= 2 ? { question, options } : null;
 }
 
-// ======================== SOLVING ========================
-
 async function solveCurrentQuestion() {
-    const extracted = extractQuestionAndOptions();
-    if (!extracted) return;
+    if (isSolving) return;
+    
+    const qId = getQuestionId();
+    if (solvedQuestions.has(qId)) return;
 
-    extracted.container.dataset.aiSolved = 'true';
-    solverLog(`🧐 Question detected: "${extracted.question}"`);
-    solverLog(`📋 Options: ${extracted.options.join(' | ')}`);
+    const extracted = extractQuestionAndOptions();
+    if (!extracted || extracted.options.length === 0) return;
+
+    isSolving = true;
+    
+    solverLog('🧐 Question detected:', extracted.question);
+    solverLog('📋 Options:', extracted.options.join(' | '));
 
     const systemPrompt = `You are a helpful assistant answering a survey. 
-    CRITICAL RULES:
-    1. If the question asks you to select a specific option to prove you are paying attention (e.g., "Select 'Sometimes'", "Choose 'Neither agree nor disagree'", "Type 'Apple'"), YOU MUST follow that instruction exactly.
-    2. If there are no attention traps, answer logically and honestly based on common sense.
-    3. Return ONLY the exact text of the correct option from the provided list. Do not add punctuation or explanation.`;
+CRITICAL RULES:
+1. If the question asks you to select a specific option to prove you are paying attention (e.g., "Select 'Sometimes'", "Choose 'Apple'"), YOU MUST follow that instruction exactly.
+2. If there are no attention traps, answer logically and honestly based on the provided context.
+3. Return ONLY the exact text of the correct option from the provided list, nothing else.`;
 
     const userPrompt = `Question: ${extracted.question}\nOptions:\n${extracted.options.map((o, i) => `${i+1}. ${o}`).join('\n')}`;
 
     try {
-        const answer = await solverNotifyBg('solve-question', { systemPrompt, userPrompt });
-        
-        if (answer && answer !== 'NO_API_KEY') {
-            solverLog(`🎯 AI suggested answer: "${answer}"`);
-            await injectAnswerWithHumanDelay(answer, extracted.options, extracted.container);
-        } else if (answer === 'NO_API_KEY') {
-            solverLog('⚠️ AI API Key not set in settings.');
+        const aiAnswer = await chrome.runtime.sendMessage({
+            target: 'background',
+            type: 'solve-question',
+            data: { systemPrompt, userPrompt }
+        });
+
+        if (aiAnswer && aiAnswer !== 'NO_API_KEY') {
+            solverLog('🎯 AI Answer:', aiAnswer);
+            const success = await injectAnswer(aiAnswer, extracted.options);
+            if (success) {
+                solvedQuestions.add(qId);
+            } else {
+                isSolving = false;
+            }
+        } else {
+            if (aiAnswer === 'NO_API_KEY') solverLog('⚠️ API Key missing.');
+            isSolving = false;
         }
-    } catch (error) {
-        solverLog('❌ Error solving question:', error);
+    } catch (e) {
+        solverLog('❌ Communication error:', e);
+        isSolving = false;
     }
 }
 
-async function injectAnswerWithHumanDelay(aiAnswer: string, options: string[], container: HTMLElement) {
-    // Find the element to click
-    const clickableEls = container.querySelectorAll('label, [role="radio"], [role="checkbox"], button, input[type="button"]');
-    let targetEl: HTMLElement | null = null;
+async function injectAnswer(aiAnswer: string, options: string[]): Promise<boolean> {
+    const answerLower = aiAnswer.toLowerCase().trim();
+    let targetInput: HTMLElement | null = null;
 
-    for (const el of Array.from(clickableEls)) {
-        const hEl = el as HTMLElement;
-        if (hEl.textContent?.trim().toLowerCase() === aiAnswer.toLowerCase() || 
-            hEl.textContent?.trim().includes(aiAnswer)) {
-            targetEl = hEl;
+    // Search for inputs first
+    const inputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+    for (const input of Array.from(inputs)) {
+        const label = input.closest('label') || input.parentElement;
+        const labelText = label?.textContent?.trim().toLowerCase() || '';
+        
+        if (labelText === answerLower || labelText.includes(answerLower)) {
+            targetInput = input as HTMLElement;
             break;
         }
     }
 
-    if (targetEl) {
-        const delay = SOLVER_CONFIG.HUMAN_DELAY_MIN + Math.random() * (SOLVER_CONFIG.HUMAN_DELAY_MAX - SOLVER_CONFIG.HUMAN_DELAY_MIN);
-        solverLog(`⏳ Waiting ${Math.round(delay)}ms to simulate human thinking...`);
-        
-        await new Promise(resolve => setTimeout(resolve, delay));
-        
-        solverLog('🖱️ Clicking answer...');
-        targetEl.click();
-
-        // Optional: Auto-click "Next" if found
-        const nextDelay = SOLVER_CONFIG.NEXT_DELAY_MIN + Math.random() * (SOLVER_CONFIG.NEXT_DELAY_MAX - SOLVER_CONFIG.NEXT_DELAY_MIN);
-        await new Promise(resolve => setTimeout(resolve, nextDelay));
-
-        const nextButton = document.querySelector('input[type="submit"], #NextButton, .NextButton, button[title*="Next"], button:contains("Next"), button:contains("Continue")') as HTMLElement;
-        if (nextButton && nextButton.offsetParent !== null) {
-            solverLog('➡️ Clicking "Next" button...');
-            nextButton.click();
+    // Fallback to buttons/labels
+    if (!targetInput) {
+        const interactables = document.querySelectorAll('label, button, .choice-label');
+        for (const el of Array.from(interactables)) {
+            const text = el.textContent?.trim().toLowerCase() || '';
+            if (text === answerLower || text.includes(answerLower)) {
+                targetInput = el as HTMLElement;
+                break;
+            }
         }
+    }
+
+    if (targetInput) {
+        const answerDelay = SOLVER_CONFIG.ANSWER_DELAY_MIN + Math.random() * (SOLVER_CONFIG.ANSWER_DELAY_MAX - SOLVER_CONFIG.ANSWER_DELAY_MIN);
+        solverLog(`⏳ Waiting ${Math.round(answerDelay)}ms (Human Delay)...`);
+        
+        return new Promise((resolve) => {
+            setTimeout(() => {
+                targetInput?.click();
+                solverLog('🖱️ Answer clicked.');
+
+                const nextDelay = SOLVER_CONFIG.NEXT_DELAY_MIN + Math.random() * (SOLVER_CONFIG.NEXT_DELAY_MAX - SOLVER_CONFIG.NEXT_DELAY_MIN);
+                setTimeout(() => {
+                    clickNextButton();
+                    resolve(true);
+                }, nextDelay);
+                
+            }, answerDelay);
+        });
     } else {
-        solverLog(`❌ Could not find clickable element for answer: "${aiAnswer}"`);
+        solverLog('❌ Matching element not found.');
+        return false;
     }
 }
 
-// ======================== UTILS ========================
+function clickNextButton() {
+    // Uses only valid CSS selectors as noted in review
+    const nextButton = document.querySelector('#NextButton, input[type="submit"], button[name="Next"], button.NextButton, .next-button');
+    if (nextButton && (nextButton as HTMLElement).offsetParent !== null) {
+        (nextButton as HTMLElement).click();
+        solverLog('➡️ Next clicked.');
+    }
+    // Release lock after a short buffer
+    setTimeout(() => { isSolving = false; }, 2000);
+}
 
-function solverNotifyBg(type: string, data?: any): Promise<any> {
-    return new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({
-            target: 'background',
-            type: type,
-            data: data,
-        }, response => {
-            if (chrome.runtime.lastError) {
-                reject(chrome.runtime.lastError);
-            } else {
-                resolve(response);
-            }
-        });
+function setupSolverObserver() {
+    if (solverObserver) solverObserver.disconnect();
+    
+    let debounce: any = null;
+    solverObserver = new MutationObserver(() => {
+        if (debounce) clearTimeout(debounce);
+        debounce = setTimeout(() => {
+            solveCurrentQuestion();
+        }, SOLVER_CONFIG.DEBOUNCE_TIME);
     });
+
+    solverObserver.observe(document.body, { childList: true, subtree: true });
+    solverLog('👁️ MutationObserver active.');
 }
 
-// ======================== INITIALIZATION ========================
-
-function startSolver() {
-    solverLog('🚀 AI Solver activated.');
-    
-    // Periodically scan for new questions
-    setInterval(solveCurrentQuestion, SOLVER_CONFIG.SCAN_INTERVAL);
-    
-    // Also solve immediately
-    solveCurrentQuestion();
-}
-
-// Start only if we have the Prolific PID (meaning we are in a study)
+// Start Solver
 if (window.location.href.includes('PROLIFIC_PID=')) {
-    startSolver();
+    solverLog('🚀 Study page detected. Ready.');
+    // Initial delay for page load
+    setTimeout(() => {
+        solveCurrentQuestion();
+        setupSolverObserver();
+    }, 2500);
 }

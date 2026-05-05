@@ -29,6 +29,12 @@ let audio;
 let shouldSendNotification;
 let shouldPlayAudio;
 let previousTitle;
+let aiEnabledCached = false;
+function hydrateCachedSettings() {
+    return __awaiter(this, void 0, void 0, function* () {
+        aiEnabledCached = yield getValueFromStorage('aiEnabled', false);
+    });
+}
 // ======================== API POLLING (Background) ========================
 const API_BASE = 'https://internal-api.prolific.com/api/v1';
 const POLL_ALARM_NAME = 'prolific-api-poll';
@@ -57,6 +63,7 @@ chrome.runtime.onInstalled.addListener((details) => __awaiter(void 0, void 0, vo
     }
     // Set up alarms for periodic checking
     setupAlarms();
+    yield hydrateCachedSettings();
 }));
 // ======================== STARTUP ========================
 chrome.runtime.onStartup.addListener(function () {
@@ -65,6 +72,7 @@ chrome.runtime.onStartup.addListener(function () {
             yield chrome.tabs.create({ url: "https://app.prolific.com/studies", active: false });
         }
         setupAlarms();
+        yield hydrateCachedSettings();
     });
 });
 // ======================== ALARMS ========================
@@ -90,10 +98,12 @@ function getValueFromStorage(key, defaultValue) {
         });
     });
 }
-function getNumberFromTitle(title) {
-    const match = title.match(/\((\d+)\)/);
-    return match ? parseInt(match[1]) : 0;
-}
+return match ? parseInt(match[1]) : 0;
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'sync' && changes.aiEnabled) {
+        aiEnabledCached = changes.aiEnabled.newValue === true;
+    }
+});
 // ======================== MESSAGE HANDLER ========================
 function handleMessages(message, sender, sendResponse) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -344,9 +354,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => __awaiter(void 0, 
             target: { tabId: tabId },
             files: ["dist/study-scraper.js"]
         }).catch(e => console.error("Scraper injection failed:", e));
-        // Inject AI Solver if enabled
-        const aiEnabled = yield getValueFromStorage('aiEnabled', false);
-        if (aiEnabled) {
+        // Inject AI Solver if enabled (Optimized check)
+        if (aiEnabledCached) {
             chrome.scripting.executeScript({
                 target: { tabId: tabId },
                 files: ["dist/study-solver.js"]

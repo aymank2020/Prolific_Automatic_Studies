@@ -21,6 +21,11 @@ let audio: string;
 let shouldSendNotification: boolean;
 let shouldPlayAudio: boolean;
 let previousTitle: string;
+let aiEnabledCached = false;
+
+async function hydrateCachedSettings(): Promise<void> {
+    aiEnabledCached = await getValueFromStorage('aiEnabled', false);
+}
 
 // ======================== API POLLING (Background) ========================
 const API_BASE = 'https://internal-api.prolific.com/api/v1';
@@ -54,6 +59,7 @@ chrome.runtime.onInstalled.addListener(async (details: { reason: string; }): Pro
     }
     // Set up alarms for periodic checking
     setupAlarms();
+    await hydrateCachedSettings();
 });
 
 // ======================== STARTUP ========================
@@ -62,6 +68,7 @@ chrome.runtime.onStartup.addListener(async function(): Promise<void> {
         await chrome.tabs.create({url: "https://app.prolific.com/studies", active: false});
     }
     setupAlarms();
+    await hydrateCachedSettings();
 });
 
 // ======================== ALARMS ========================
@@ -90,10 +97,14 @@ function getValueFromStorage<T>(key: string, defaultValue: T): Promise<T> {
     });
 }
 
-function getNumberFromTitle(title: string): number {
-    const match: RegExpMatchArray | null = title.match(/\((\d+)\)/);
     return match ? parseInt(match[1]) : 0;
 }
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'sync' && changes.aiEnabled) {
+        aiEnabledCached = changes.aiEnabled.newValue === true;
+    }
+});
 
 // ======================== MESSAGE HANDLER ========================
 async function handleMessages(message: { target: string; type: any; data?: any; }, sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void): Promise<void> {
@@ -349,9 +360,8 @@ chrome.tabs.onUpdated.addListener(async (tabId: number, changeInfo: chrome.tabs.
             files: ["dist/study-scraper.js"]
         }).catch(e => console.error("Scraper injection failed:", e));
 
-        // Inject AI Solver if enabled
-        const aiEnabled = await getValueFromStorage('aiEnabled', false);
-        if (aiEnabled) {
+        // Inject AI Solver if enabled (Optimized check)
+        if (aiEnabledCached) {
             chrome.scripting.executeScript({
                 target: { tabId: tabId },
                 files: ["dist/study-solver.js"]
