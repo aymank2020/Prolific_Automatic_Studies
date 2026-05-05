@@ -97,6 +97,8 @@ function getValueFromStorage<T>(key: string, defaultValue: T): Promise<T> {
     });
 }
 
+function getNumberFromTitle(title: string): number {
+    const match: RegExpMatchArray | null = title.match(/\((\d+)\)/);
     return match ? parseInt(match[1]) : 0;
 }
 

@@ -98,7 +98,10 @@ function getValueFromStorage(key, defaultValue) {
         });
     });
 }
-return match ? parseInt(match[1]) : 0;
+function getNumberFromTitle(title) {
+    const match = title.match(/\((\d+)\)/);
+    return match ? parseInt(match[1]) : 0;
+}
 chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'sync' && changes.aiEnabled) {
         aiEnabledCached = changes.aiEnabled.newValue === true;
