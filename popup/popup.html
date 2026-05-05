@@ -21,6 +21,7 @@
     </div>
     <nav class="tabs">
         <button class="tab active" data-tab="auto-reserve">Auto-Reserve</button>
+        <button class="tab" data-tab="history">History</button>
         <button class="tab" data-tab="settings">Settings</button>
     </nav>
 </header>
@@ -119,6 +120,15 @@
             </select>
             <button id="playAudio" class="btn btn-sm btn-secondary">Test</button>
         </div>
+    </div>
+</section>
+
+<!-- ===== TAB: HISTORY ===== -->
+<section id="tab-history" class="tab-content">
+    <div class="card" style="padding: 0; max-height: 250px; overflow-y: auto;">
+        <ul id="historyList" class="history-list">
+            <li class="history-empty">No reserved studies yet.</li>
+        </ul>
     </div>
 </section>
 

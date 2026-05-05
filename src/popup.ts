@@ -16,6 +16,10 @@ function setupTabs(): void {
             tab.classList.add('active');
             const targetEl = document.getElementById(`tab-${target}`);
             if (targetEl) targetEl.classList.add('active');
+            
+            if (target === 'history') {
+                loadHistory();
+            }
         });
     });
 }
@@ -137,6 +141,58 @@ async function setupForceCheck(): Promise<void> {
     });
 }
 
+// ======================== HISTORY ========================
+
+async function loadHistory() {
+    const historyList = document.getElementById('historyList');
+    if (!historyList) return;
+
+    try {
+        const result = await chrome.storage.local.get('studyHistory');
+        const history = result.studyHistory || [];
+
+        if (history.length === 0) {
+            historyList.innerHTML = '<div class="history-item">No reserved studies yet.</div>';
+            return;
+        }
+
+        historyList.innerHTML = history.map((item: any) => {
+            const timeStr = new Date(item.timestamp).toLocaleString();
+            
+            // Format currency if it exists
+            let payStr = 'N/A';
+            if (item.pay !== undefined && item.pay !== 0) {
+                payStr = `£${(item.pay / 100).toFixed(2)}`;
+            }
+            
+            let payHourStr = '';
+            if (item.payPerHour) {
+                payHourStr = ` (£${(item.payPerHour / 100).toFixed(2)} /hr)`;
+            }
+
+            const title = item.title && item.title !== 'Unknown Study' ? item.title : `Study ${item.id.substring(0,8)}...`;
+            const researcher = item.researcher && item.researcher !== 'Unknown Researcher' ? item.researcher : '';
+            
+            return `
+                <div class="history-item">
+                    <div style="font-weight: bold; margin-bottom: 4px; color: #1e3a8a;">${title}</div>
+                    ${researcher ? `<div style="font-size: 11px; margin-bottom: 4px; color: #4b5563;">${researcher}</div>` : ''}
+                    <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
+                        <span>Pay: <strong>${payStr}</strong>${payHourStr}</span>
+                        <span>Time: ${item.duration ? item.duration + ' mins' : 'N/A'}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 10px; color: #6b7280; border-top: 1px solid #eee; padding-top: 4px; margin-top: 4px;">
+                        <span>${timeStr}</span>
+                        <span>Source: ${item.source}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        historyList.innerHTML = '<div class="history-item">Error loading history</div>';
+    }
+}
+
 // ======================== LIVE STATUS ========================
 
 function updateStatus(): void {
@@ -220,4 +276,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     // Live status updates
     updateStatus();
     setInterval(updateStatus, 3000);
+    
+    // Initial history load
+    loadHistory();
 });

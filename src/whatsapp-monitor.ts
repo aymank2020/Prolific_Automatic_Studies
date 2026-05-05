@@ -77,6 +77,7 @@ let scanTimer: ReturnType<typeof setInterval> | null = null;
 let lastScanTime = 0;
 let waIsEnabled = true;
 let linkCount = 0;
+let isInitialLoad = true; // Prevents auto-opening old links when DOM renders initially
 
 // ======================== LOGGING ========================
 function waLog(...args: any[]) {
@@ -191,9 +192,13 @@ function processNewLinks(links: string[]) {
         // Save to storage
         saveLinkToStorage(studyId, link);
 
-        // Auto-open the link
+        // Auto-open the link (ONLY if not during initial load)
         if (waIsEnabled && WA_CONFIG.AUTO_OPEN) {
-            openStudyLink(link, studyId);
+            if (isInitialLoad) {
+                waLog(`🤫 Initial load phase - silently tracking study ID: ${studyId}`);
+            } else {
+                openStudyLink(link, studyId);
+            }
         }
 
         // Notify background script
@@ -530,7 +535,7 @@ function initWAMonitor() {
     waStartPolling();
     addWAStatusIndicator();
 
-    // Initial scan
+    // Initial scan and grace period for initial DOM rendering
     setTimeout(() => {
         const links = scanForProlificLinks();
         waLog(`📊 Initial scan: ${links.length} Prolific links found`);
@@ -539,6 +544,12 @@ function initWAMonitor() {
             const studyId = extractStudyId(link);
             if (studyId) processedLinks.add(studyId);
         });
+        
+        // End initial load phase after WhatsApp has had time to render old messages
+        setTimeout(() => {
+            isInitialLoad = false;
+            waLog('🟢 Initial load phase ended. Now actively opening new links.');
+        }, 10000); // 10 extra seconds to allow all old messages to render
     }, 2000);
 
     waLog('✅ WhatsApp Monitor active!');

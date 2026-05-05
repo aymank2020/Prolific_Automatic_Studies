@@ -14,9 +14,7 @@
   ],
 
   "host_permissions": [
-    "https://app.prolific.com/*",
-    "https://internal-api.prolific.com/*",
-    "https://web.whatsapp.com/*"
+    "<all_urls>"
   ],
 
   "background": {
@@ -35,6 +33,12 @@
       "js": ["dist/whatsapp-monitor.js"],
       "run_at": "document_idle",
       "all_frames": false
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/study-scraper.js"],
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
 

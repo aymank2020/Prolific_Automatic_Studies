@@ -93,7 +93,7 @@ function getNumberFromTitle(title: string): number {
 }
 
 // ======================== MESSAGE HANDLER ========================
-async function handleMessages(message: { target: string; type: any; data?: any; }): Promise<void> {
+async function handleMessages(message: { target: string; type: any; data?: any; }, sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void): Promise<void> {
     if (message.target !== 'background') {
         return;
     }
@@ -173,7 +173,46 @@ async function handleMessages(message: { target: string; type: any; data?: any; 
                 sendNotification(`📱 New study link from WhatsApp! ID: ${message.data?.studyId || 'unknown'}`);
             }
             break;
+
+        // Content Script: Close Tab
+        case 'close-tab':
+            console.log('[Background] Closing tab as requested by content script:', sender.tab?.id);
+            if (sender.tab?.id) {
+                chrome.tabs.remove(sender.tab.id).catch(e => console.error("Failed to close tab:", e));
+            }
+            break;
+            
+        // History: Study Reserved
+        case 'study-reserved':
+            if (message.data?.count) {
+                addToHistory(message.data);
+            }
+            break;
     }
+}
+
+async function addToHistory(data: any) {
+    try {
+        const history: any[] = await getValueFromStorage<any[]>('studyHistory', []);
+        
+        let studyInfo = data.study || {};
+        
+        history.unshift({
+            timestamp: Date.now(),
+            count: data.count || 1,
+            id: data.id || studyInfo.id || 'unknown',
+            title: studyInfo.name || 'Unknown Study',
+            researcher: studyInfo.researcher?.name || 'Unknown Researcher',
+            pay: studyInfo.reward || 0,
+            payPerHour: studyInfo.estimated_reward_per_hour || 0,
+            duration: studyInfo.estimated_completion_time || 0,
+            places: studyInfo.total_available_places || 0,
+            source: data.source || 'auto'
+        });
+        // Keep only last 50 studies for a richer history
+        if (history.length > 50) history.length = 50;
+        await chrome.storage.local.set({ studyHistory: history });
+    } catch (e) {}
 }
 
 // ======================== STUDY HANDLERS ========================

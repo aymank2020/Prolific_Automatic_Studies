@@ -63,6 +63,7 @@ const CONFIG = {
 let isEnabled = true;
 let knownStudyIds = new Set();
 let reservedStudyIds = new Set();
+let knownStudiesData = new Map();
 let lastStudyCount = 0;
 let fastPollTimer = null;
 let pollTimer = null;
@@ -78,8 +79,15 @@ function check404AndRedirect() {
     var _a;
     const bodyText = ((_a = document.body) === null || _a === void 0 ? void 0 : _a.textContent) || '';
     if (bodyText.includes('404') && bodyText.includes('Page Not Found')) {
-        log('🔴 404 detected! Redirecting to studies page...');
-        window.location.href = 'https://app.prolific.com/studies';
+        const isSpecificStudy = getStudyIdFromUrl() !== null;
+        if (isSpecificStudy) {
+            log('🔴 404 detected on specific study! Closing tab...');
+            notifyBg('close-tab');
+        }
+        else {
+            log('🔴 404 detected! Redirecting to studies page...');
+            window.location.href = 'https://app.prolific.com/studies';
+        }
         return true;
     }
     return false;
@@ -89,11 +97,20 @@ function checkStudyFull() {
     const bodyText = (((_a = document.body) === null || _a === void 0 ? void 0 : _a.textContent) || '').toLowerCase();
     for (const text of CONFIG.STUDY_FULL_TEXT) {
         if (bodyText.includes(text)) {
-            log(`🔴 Study is full: "${text}". Redirecting to studies page...`);
-            // Wait a moment then redirect
-            setTimeout(() => {
-                window.location.href = 'https://app.prolific.com/studies';
-            }, 1500);
+            const isSpecificStudy = getStudyIdFromUrl() !== null;
+            if (isSpecificStudy) {
+                log(`🔴 Study is full: "${text}". Closing tab...`);
+                // Wait a moment so user sees what happened, then close
+                setTimeout(() => {
+                    notifyBg('close-tab');
+                }, 1500);
+            }
+            else {
+                log(`🔴 Study is full: "${text}". Redirecting to studies page...`);
+                setTimeout(() => {
+                    window.location.href = 'https://app.prolific.com/studies';
+                }, 1500);
+            }
             return true;
         }
     }
@@ -162,6 +179,13 @@ function tryAutoReserve() {
             btn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
             reservedStudyIds.add(id);
             clicked++;
+            const studyData = knownStudiesData.get(id) || null;
+            notifyBg('study-reserved', {
+                count: 1,
+                id: id,
+                timestamp: Date.now(),
+                study: studyData
+            });
             log(`🎉 Reserved study ${id} in ${Date.now() - t0}ms`);
         }
         catch (e) {
@@ -188,7 +212,11 @@ function tryAutoReserve() {
         }
     }
     if (clicked > 0) {
-        notifyBg('study-reserved', { count: clicked, timestamp: Date.now() });
+        // Find the last clicked id (rough approximation since we might click multiple, but usually it's 1)
+        // If there's multiple, we'll just log the count, but for history we want the data of the ones we just reserved
+        // Actually, let's just use the id if it exists.
+        // In tryAutoReserve we loop and can send individual events per study.
+        // We already do btn.click() loop. 
     }
     return clicked;
 }
@@ -316,9 +344,12 @@ function interceptFetch() {
                         let newCount = 0;
                         for (const s of studies) {
                             const id = s.id || s.study_id;
-                            if (id && !knownStudyIds.has(id)) {
-                                knownStudyIds.add(id);
-                                newCount++;
+                            if (id) {
+                                if (!knownStudyIds.has(id)) {
+                                    knownStudyIds.add(id);
+                                    newCount++;
+                                }
+                                knownStudiesData.set(id, s);
                             }
                         }
                         if (newCount > 0 && isTargetPage())
@@ -351,9 +382,12 @@ function interceptXHR() {
                         let n = 0;
                         for (const s of studies) {
                             const id = s.id || s.study_id;
-                            if (id && !knownStudyIds.has(id)) {
-                                knownStudyIds.add(id);
-                                n++;
+                            if (id) {
+                                if (!knownStudyIds.has(id)) {
+                                    knownStudyIds.add(id);
+                                    n++;
+                                }
+                                knownStudiesData.set(id, s);
                             }
                         }
                         if (n > 0 && isTargetPage())
