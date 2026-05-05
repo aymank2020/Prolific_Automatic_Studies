@@ -34,7 +34,10 @@ const API_BASE = 'https://internal-api.prolific.com/api/v1';
 const POLL_ALARM_NAME = 'prolific-api-poll';
 const FAST_POLL_ALARM_NAME = 'prolific-fast-poll';
 // ======================== MESSAGE HANDLERS ========================
-chrome.runtime.onMessage.addListener(handleMessages);
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    handleMessages(message, sender, sendResponse);
+    return true; // Needed for async sendResponse
+});
 chrome.notifications.onClicked.addListener(function (notificationId) {
     chrome.tabs.create({ url: "https://app.prolific.com/studies", active: true });
     chrome.notifications.clear(notificationId);
@@ -120,10 +123,13 @@ function handleMessages(message, sender, sendResponse) {
             case 'study-reserved':
                 console.log('[Background] Study reserved:', message.data);
                 yield handleStudyReserved(message.data);
+                if ((_a = message.data) === null || _a === void 0 ? void 0 : _a.count) {
+                    yield addToHistory(message.data);
+                }
                 break;
             // New: Toggle auto-reserve
             case 'toggle-auto-reserve':
-                const enabled = (_b = (_a = message.data) === null || _a === void 0 ? void 0 : _a.enabled) !== null && _b !== void 0 ? _b : true;
+                const enabled = (_c = (_b = message.data) === null || _b === void 0 ? void 0 : _b.enabled) !== null && _c !== void 0 ? _c : true;
                 yield chrome.storage.sync.set({ [AUTO_RESERVE]: enabled });
                 // Forward to content script
                 yield broadcastToContentScripts({
@@ -142,8 +148,8 @@ function handleMessages(message, sender, sendResponse) {
                 break;
             // WhatsApp: Open study link from WhatsApp monitor
             case 'open-study-link':
-                console.log('[Background] Opening study from WhatsApp:', (_c = message.data) === null || _c === void 0 ? void 0 : _c.url);
-                if ((_d = message.data) === null || _d === void 0 ? void 0 : _d.url) {
+                console.log('[Background] Opening study from WhatsApp:', (_d = message.data) === null || _d === void 0 ? void 0 : _d.url);
+                if ((_e = message.data) === null || _e === void 0 ? void 0 : _e.url) {
                     yield chrome.tabs.create({ url: message.data.url, active: true });
                     // Play sound alert
                     shouldPlayAudio = yield getValueFromStorage(AUDIO_ACTIVE, true);
@@ -161,20 +167,14 @@ function handleMessages(message, sender, sendResponse) {
                 console.log('[Background] WhatsApp study found:', message.data);
                 shouldSendNotification = yield getValueFromStorage(SHOW_NOTIFICATION, true);
                 if (shouldSendNotification) {
-                    sendNotification(`📱 New study link from WhatsApp! ID: ${((_e = message.data) === null || _e === void 0 ? void 0 : _e.studyId) || 'unknown'}`);
+                    sendNotification(`📱 New study link from WhatsApp! ID: ${((_f = message.data) === null || _f === void 0 ? void 0 : _f.studyId) || 'unknown'}`);
                 }
                 break;
             // Content Script: Close Tab
             case 'close-tab':
-                console.log('[Background] Closing tab as requested by content script:', (_f = sender.tab) === null || _f === void 0 ? void 0 : _f.id);
-                if ((_g = sender.tab) === null || _g === void 0 ? void 0 : _g.id) {
+                console.log('[Background] Closing tab as requested by content script:', (_g = sender.tab) === null || _g === void 0 ? void 0 : _g.id);
+                if ((_h = sender.tab) === null || _h === void 0 ? void 0 : _h.id) {
                     chrome.tabs.remove(sender.tab.id).catch(e => console.error("Failed to close tab:", e));
-                }
-                break;
-            // History: Study Reserved
-            case 'study-reserved':
-                if ((_h = message.data) === null || _h === void 0 ? void 0 : _h.count) {
-                    addToHistory(message.data);
                 }
                 break;
         }
@@ -437,3 +437,13 @@ function setupOffscreenDocument(path) {
         }
     });
 }
+// ======================== DYNAMIC SCRIPT INJECTION ========================
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    var _a;
+    if (changeInfo.status === 'complete' && ((_a = tab.url) === null || _a === void 0 ? void 0 : _a.includes('PROLIFIC_PID='))) {
+        chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            files: ["dist/study-scraper.js"]
+        }).catch(e => console.error("Script injection failed:", e));
+    }
+});

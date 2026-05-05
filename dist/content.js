@@ -166,7 +166,7 @@ function tryAutoReserve() {
         return 0;
     let clicked = 0;
     for (const btn of buttons) {
-        const id = getStudyIdFromUrl() || `btn-${clicked}`;
+        const id = getStudyIdFromUrl() || getStudyIdFromElement(btn) || `btn-${clicked}`;
         if (reservedStudyIds.has(id))
             continue;
         log(`🎯 Clicking reserve button: "${(_a = btn.textContent) === null || _a === void 0 ? void 0 : _a.trim()}"`);
@@ -223,6 +223,15 @@ function tryAutoReserve() {
 function getStudyIdFromUrl() {
     const m = window.location.href.match(/\/studies\/([a-f0-9]+)/i);
     return m ? m[1] : null;
+}
+function getStudyIdFromElement(el) {
+    var _a;
+    const link = el.closest('a[href*="/studies/"]') || el.querySelector('a[href*="/studies/"]');
+    if (link) {
+        const match = (_a = link.getAttribute('href')) === null || _a === void 0 ? void 0 : _a.match(/\/studies\/([a-f0-9]+)/i);
+        return match ? match[1] : null;
+    }
+    return null;
 }
 function findStudyCards() {
     const cards = [];

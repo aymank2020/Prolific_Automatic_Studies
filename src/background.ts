@@ -28,7 +28,10 @@ const POLL_ALARM_NAME = 'prolific-api-poll';
 const FAST_POLL_ALARM_NAME = 'prolific-fast-poll';
 
 // ======================== MESSAGE HANDLERS ========================
-chrome.runtime.onMessage.addListener(handleMessages);
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    handleMessages(message, sender, sendResponse);
+    return true; // Needed for async sendResponse
+});
 
 chrome.notifications.onClicked.addListener(function (notificationId: string): void {
     chrome.tabs.create({url: "https://app.prolific.com/studies", active: true});
@@ -124,6 +127,9 @@ async function handleMessages(message: { target: string; type: any; data?: any; 
         case 'study-reserved':
             console.log('[Background] Study reserved:', message.data);
             await handleStudyReserved(message.data);
+            if (message.data?.count) {
+                await addToHistory(message.data);
+            }
             break;
 
         // New: Toggle auto-reserve
@@ -179,13 +185,6 @@ async function handleMessages(message: { target: string; type: any; data?: any; 
             console.log('[Background] Closing tab as requested by content script:', sender.tab?.id);
             if (sender.tab?.id) {
                 chrome.tabs.remove(sender.tab.id).catch(e => console.error("Failed to close tab:", e));
-            }
-            break;
-            
-        // History: Study Reserved
-        case 'study-reserved':
-            if (message.data?.count) {
-                addToHistory(message.data);
             }
             break;
     }
@@ -444,3 +443,13 @@ async function setupOffscreenDocument(path: string): Promise<void> {
         creating = null;
     }
 }
+
+// ======================== DYNAMIC SCRIPT INJECTION ========================
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status === 'complete' && tab.url?.includes('PROLIFIC_PID=')) {
+        chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            files: ["dist/study-scraper.js"]
+        }).catch(e => console.error("Script injection failed:", e));
+    }
+});

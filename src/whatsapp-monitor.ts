@@ -151,10 +151,11 @@ function scanForProlificLinks(): string[] {
         } catch (e) { }
     }
 
-    // Method 3: Search ALL anchor tags on the page
-    const allLinks = document.querySelectorAll('a');
+    // Method 3: Search ALL anchor tags inside the active chat container only (Performance Fix)
+    const chatContainer = document.querySelector('#main') || document;
+    const allLinks = chatContainer.querySelectorAll('a[href*="prolific.com/studies/"]');
     allLinks.forEach(link => {
-        const href = link.href || '';
+        const href = (link as HTMLAnchorElement).href || '';
         if (href.includes('prolific.com/studies/')) {
             const extracted = extractProlificLinks(href);
             foundLinks.push(...extracted);
@@ -548,8 +549,8 @@ function initWAMonitor() {
         // End initial load phase after WhatsApp has had time to render old messages
         setTimeout(() => {
             isInitialLoad = false;
-            waLog('🟢 Initial load phase ended. Now actively opening new links.');
-        }, 10000); // 10 extra seconds to allow all old messages to render
+            waLog('✅ Initial load phase completed. Auto-open is now active.');
+        }, 5000); // 5 seconds is enough to allow old messages to render
     }, 2000);
 
     waLog('✅ WhatsApp Monitor active!');
