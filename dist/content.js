@@ -96,57 +96,57 @@ function check404AndRedirect() {
 }
 function checkStudyFull() {
     const bodyText = (document.body?.textContent || '').toLowerCase();
-    // First, check for LIMITED CAPACITY (Temporary)
-    for (const text of CONFIG.LIMITED_CAPACITY_TEXT) {
-        if (bodyText.includes(text)) {
-            log(`🟡 Limited Capacity detected: "${text}". Waiting to retry...`);
-            handleLimitedCapacity();
-            return true;
-        }
+    // IMPORTANT: Exclude "submissions at a time" from fatal full checks!
+    if (bodyText.includes('submissions at a time') || bodyText.includes('currently full')) {
+        return false;
     }
-    // Then, check for PERMANENTLY FULL
     for (const text of CONFIG.STUDY_FULL_TEXT) {
         if (bodyText.includes(text)) {
             const isSpecificStudy = getStudyIdFromUrl() !== null;
             if (isSpecificStudy) {
-                log(`🔴 Study is full: "${text}". Closing tab...`);
-                // Wait a moment so user sees what happened, then close
-                setTimeout(() => {
-                    notifyBg('close-tab');
-                }, 1500);
+                log(`🔴 Study permanently full: "${text}". Closing tab...`);
+                setTimeout(() => { notifyBg('close-tab'); }, 1500);
             }
             else {
-                log(`🔴 Study is full: "${text}". Redirecting to studies page...`);
-                setTimeout(() => {
-                    window.location.href = 'https://app.prolific.com/studies';
-                }, 1500);
+                setTimeout(() => { window.location.href = 'https://app.prolific.com/studies'; }, 1500);
             }
             return true;
         }
     }
     return false;
 }
-let limitedCapacityTimer = null;
+let isAutoRefreshing = false;
 function handleLimitedCapacity() {
-    if (limitedCapacityTimer)
-        return;
-    updateIndicator('warn', 'Limited Capacity - Retrying...');
-    // Strategy: Try to click the 'Start study' button every 10 seconds
-    // or refresh every 30 seconds if button not found
-    let attempts = 0;
-    limitedCapacityTimer = setInterval(() => {
-        attempts++;
-        log(`🔄 Limited Capacity Retry #${attempts}`);
-        const buttons = findReserveButtons();
-        if (buttons.length > 0) {
-            log('🎯 Found Start button, clicking...');
-            buttons[0].click();
+    const bodyText = (document.body?.textContent || '').toLowerCase();
+    if (bodyText.includes('submissions at a time') && bodyText.includes('currently full')) {
+        if (isAutoRefreshing)
+            return true;
+        log('⏳ LIMITED CAPACITY! Starting smart-refresh cycle...');
+        isAutoRefreshing = true;
+        updateIndicator('warn', 'Limited Capacity - Waiting for spot...');
+        // Stop regular polling
+        if (fastPollTimer) {
+            clearInterval(fastPollTimer);
+            fastPollTimer = null;
         }
-        else if (attempts % 3 === 0) {
-            log('🔄 Refreshing page to clear error state...');
-            window.location.reload();
+        if (pollTimer) {
+            clearTimeout(pollTimer);
+            pollTimer = null;
         }
-    }, 10000);
+        // Human-like delay before refresh (3-7 seconds)
+        const delay = 3000 + Math.random() * 4000;
+        log(`🔄 Scheduling human-like refresh in ${Math.round(delay / 1000)}s`);
+        setTimeout(() => {
+            if (isEnabled) {
+                window.location.reload();
+            }
+            else {
+                isAutoRefreshing = false;
+            }
+        }, delay);
+        return true;
+    }
+    return false;
 }
 function checkRateLimit() {
     const pageText = document.body.innerText.toLowerCase();
@@ -597,7 +597,9 @@ function addIndicator() {
     css.textContent = `@keyframes pulse-g{0%,100%{box-shadow:0 2px 8px rgba(0,200,83,0.3)}
         50%{box-shadow:0 2px 16px rgba(0,200,83,0.6)}}
         #prolific-auto-indicator:hover{transform:scale(1.2)}
-        #prolific-auto-indicator.off{background:rgba(200,50,50,0.9);animation:none}`;
+        #prolific-auto-indicator.off{background:rgba(200,50,50,0.9);animation:none}
+        #prolific-auto-indicator.refreshing{background:rgba(255,165,0,0.9);animation:spin 1s linear infinite}
+        @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}`;
     document.head.appendChild(css);
     el.addEventListener('click', () => {
         isEnabled = !isEnabled;
@@ -610,9 +612,11 @@ function updateIndicator(type, text) {
     if (!el)
         return;
     el.title = text;
+    el.classList.remove('refreshing');
     if (type === 'warn') {
         el.style.background = 'rgba(255,152,0,0.9)';
-        el.innerHTML = '⏳';
+        el.innerHTML = '🔄';
+        el.classList.add('refreshing');
     }
     else if (type === 'error') {
         el.style.background = 'rgba(244,67,54,0.9)';
