@@ -45,8 +45,8 @@
   },
 
   "icons": {
-    "16": "imgs/logo.png",
-    "48": "imgs/logo.png",
-    "128": "imgs/logo.png"
+    "16": "imgs/icon16.png",
+    "48": "imgs/icon48.png",
+    "128": "imgs/icon128.png"
   }
 }
