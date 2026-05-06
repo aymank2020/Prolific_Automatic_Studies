@@ -210,7 +210,7 @@ async function loadHistory() {
     }
 }
 // ======================== LIVE STATUS ========================
-function updateStatus() {
+async function updateStatus() {
     const statusCard = document.getElementById("statusCard");
     const statusText = document.getElementById("statusText");
     const studyCount = document.getElementById("studyCount");
@@ -218,10 +218,35 @@ function updateStatus() {
     const uptime = document.getElementById("uptime");
     if (!statusCard || !statusText)
         return;
-    // Use a broader query to ensure we find the Prolific tab
-    chrome.tabs.query({ url: "*://*.prolific.com/*" }, (tabs) => {
+    // 1. Ensure Background Service Worker is awake
+    let bgReady = false;
+    for (let i = 0; i < 3; i++) {
+        try {
+            const res = await new Promise((resolve) => {
+                chrome.runtime.sendMessage({ target: 'background', type: 'ping' }, (response) => {
+                    if (chrome.runtime.lastError)
+                        resolve(null);
+                    else
+                        resolve(response);
+                });
+            });
+            if (res) {
+                bgReady = true;
+                break;
+            }
+        }
+        catch (e) { }
+        await new Promise(r => setTimeout(r, 200));
+    }
+    if (!bgReady) {
+        statusCard.classList.add("disconnected");
+        statusText.textContent = "Background waking up...";
+        // We don't return here, we'll let the next interval try again
+    }
+    // 2. Query for Prolific tab
+    chrome.tabs.query({ url: "*://*.prolific.com/*" }, async (tabs) => {
         if (chrome.runtime.lastError) {
-            statusText.textContent = "Query Error: " + chrome.runtime.lastError.message;
+            statusText.textContent = "Query Error";
             statusCard.classList.add("disconnected");
             return;
         }
@@ -230,47 +255,47 @@ function updateStatus() {
             statusText.textContent = "No Prolific tab open";
             return;
         }
-        // Try the first available tab
         const targetTab = tabs[0];
         if (!targetTab.id)
             return;
-        chrome.tabs.sendMessage(targetTab.id, {
-            target: 'content-script',
-            type: 'get-status',
-        }, (response) => {
-            if (chrome.runtime.lastError) {
-                statusCard.classList.add("disconnected");
-                const err = chrome.runtime.lastError.message || "";
-                if (err.includes("Could not establish connection")) {
-                    statusText.textContent = "Content Script missing (Refresh Prolific tab)";
-                }
-                else {
-                    statusText.textContent = "Error: " + err.substring(0, 30);
-                }
-                return;
-            }
-            if (!response) {
-                statusCard.classList.add("disconnected");
-                statusText.textContent = "No response from page";
-                return;
-            }
-            statusCard.classList.remove("disconnected");
-            statusText.textContent = response.enabled ? "Active & Monitoring" : "Paused";
-            // Get current studies on page
-            if (studyCount)
-                studyCount.textContent = (response.studyCount || 0).toString();
-            // Get TOTAL reserved today from history instead of just session count
-            chrome.storage.local.get('studyHistory', (res) => {
-                const history = res.studyHistory || [];
-                // Filter history for studies from today
-                const today = new Date().setHours(0, 0, 0, 0);
-                const todayCount = history.filter((h) => h.timestamp > today).length;
-                if (reservedCount)
-                    reservedCount.textContent = todayCount.toString();
+        // 3. Try to contact Content Script with retries (for the very first load)
+        let response = null;
+        for (let i = 0; i < 3; i++) {
+            response = await new Promise((resolve) => {
+                chrome.tabs.sendMessage(targetTab.id, {
+                    target: 'content-script',
+                    type: 'get-status',
+                }, (res) => {
+                    if (chrome.runtime.lastError)
+                        resolve(null);
+                    else
+                        resolve(res);
+                });
             });
-            if (uptime)
-                uptime.textContent = formatUptime(response.uptime || 0);
+            if (response)
+                break;
+            await new Promise(r => setTimeout(r, 300));
+        }
+        if (!response) {
+            statusCard.classList.add("disconnected");
+            statusText.textContent = "Content Script missing (Refresh Page)";
+            return;
+        }
+        // 4. Success! Update UI
+        statusCard.classList.remove("disconnected");
+        statusText.textContent = response.enabled ? "Active & Monitoring" : "Paused";
+        if (studyCount)
+            studyCount.textContent = (response.studyCount || 0).toString();
+        // Persistent reserved count for the day
+        chrome.storage.local.get('studyHistory', (res) => {
+            const history = res.studyHistory || [];
+            const today = new Date().setHours(0, 0, 0, 0);
+            const todayCount = history.filter((h) => h.timestamp > today).length;
+            if (reservedCount)
+                reservedCount.textContent = todayCount.toString();
         });
+        if (uptime)
+            uptime.textContent = formatUptime(response.uptime || 0);
     });
 }
 function formatUptime(ms) {

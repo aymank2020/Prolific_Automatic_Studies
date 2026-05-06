@@ -131,6 +131,9 @@ async function handleMessages(message: { target: string; type: any; data?: any; 
     }
 
     switch (message.type) {
+        case 'ping':
+            sendResponse({ status: 'alive' });
+            break;
         case 'play-sound':
             audio = await getValueFromStorage(AUDIO, 'alert1.mp3');
             volume = await getValueFromStorage(VOLUME, 100) / 100;
