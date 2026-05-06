@@ -277,6 +277,42 @@ function tryAutoReserve(): number {
     return clicked;
 }
 
+/**
+ * NEW: Handle Prolific's 'Start your study' confirmation modals
+ */
+function handleModals(): boolean {
+    const modal = document.querySelector('[role="dialog"], .modal-content, [class*="Modal"]');
+    if (!modal) return false;
+
+    const modalText = modal.textContent?.toLowerCase() || '';
+    if (modalText.includes('please confirm') || modalText.includes('start your study')) {
+        log('🧩 Confirmation modal detected. Bypassing...');
+        
+        // 1. Find and check all checkboxes in the modal
+        const checkboxes = modal.querySelectorAll('input[type="checkbox"]');
+        checkboxes.forEach((cb: any) => {
+            if (!cb.checked) {
+                log('✅ Checking confirmation box...');
+                cb.click();
+            }
+        });
+
+        // 2. Find and click 'Start study' button
+        const buttons = modal.querySelectorAll('button');
+        for (const btn of Array.from(buttons)) {
+            const btnText = btn.textContent?.toLowerCase().trim() || '';
+            if (btnText === 'start study' || btnText.includes('start study')) {
+                if (!btn.hasAttribute('disabled')) {
+                    log('🚀 Clicking "Start study" button...');
+                    btn.click();
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 function getStudyIdFromUrl(): string | null {
     const m = window.location.href.match(/\/studies\/([a-f0-9]+)/i);
     return m ? m[1] : null;
@@ -335,6 +371,9 @@ function onStudyDetected(source: string) {
     
     log(`🔔 Study detected via ${source}!`);
     
+    // Priority 0: Handle Confirmation Modals
+    if (handleModals()) return;
+
     // Priority 1: Check for Limited Capacity (Smart Refresh)
     if (handleLimitedCapacity()) return;
 
@@ -532,6 +571,8 @@ function startPolling() {
     const runPoll = () => {
         if (checkRateLimit() || check404AndRedirect()) return;
         
+        handleModals();
+
         const cards = findStudyCards();
         if (cards.length > lastStudyCount) {
             log(`📊 Poll: ${lastStudyCount} → ${cards.length} studies`);
@@ -666,6 +707,9 @@ function init() {
         if (checkRateLimit()) return;
         if (check404AndRedirect()) return;
         
+        // Priority 0: Handle Confirmation Modals
+        handleModals();
+
         // Priority 1: Handle Limited Capacity with Smart Refresh
         if (handleLimitedCapacity()) return;
         
