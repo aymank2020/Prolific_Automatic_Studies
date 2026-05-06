@@ -207,24 +207,31 @@ async function addToHistory(data) {
     try {
         const history = await getValueFromStorage('studyHistory', []);
         let studyInfo = data.study || {};
+        const studyId = data.id || studyInfo.id || 'unknown';
+        // Generate Prolific URL
+        const url = studyId !== 'unknown' ? `https://app.prolific.com/studies/${studyId}` : null;
         history.unshift({
             timestamp: Date.now(),
             count: data.count || 1,
-            id: data.id || studyInfo.id || 'unknown',
-            title: studyInfo.name || 'Unknown Study',
+            id: studyId,
+            title: studyInfo.name || studyInfo.title || 'Unknown Study',
             researcher: studyInfo.researcher?.name || 'Unknown Researcher',
-            pay: studyInfo.reward || 0,
-            payPerHour: studyInfo.estimated_reward_per_hour || 0,
-            duration: studyInfo.estimated_completion_time || 0,
+            pay: studyInfo.reward || studyInfo.pay || 0,
+            payPerHour: studyInfo.estimated_reward_per_hour || studyInfo.payPerHour || 0,
+            duration: studyInfo.estimated_completion_time || studyInfo.duration || 0,
             places: studyInfo.total_available_places || 0,
-            source: data.source || 'auto'
+            source: data.source || 'auto',
+            url: data.url || url,
+            status: data.status || 'detected'
         });
-        // Keep only last 50 studies for a richer history
-        if (history.length > 50)
-            history.length = 50;
+        // Keep only last 100 studies for a richer history
+        if (history.length > 100)
+            history.length = 100;
         await chrome.storage.local.set({ studyHistory: history });
     }
-    catch (e) { }
+    catch (e) {
+        console.error('[Background] Error adding to history:', e);
+    }
 }
 // ======================== STUDY HANDLERS ========================
 async function handleStudiesDetected(data) {
@@ -242,12 +249,23 @@ async function handleStudiesDetected(data) {
     if (data?.count) {
         await updateBadge(data.count);
     }
+    // Log to history as detected
+    await addToHistory({
+        ...data,
+        source: data.source || 'content-script',
+        status: 'detected'
+    });
     // Bring Prolific tab to front
     await focusProlificTab();
 }
 async function handleStudyReserved(data) {
     const count = data?.count || 1;
     await updateCounterAndBadge(count);
+    // Update history status to reserved if it exists, or add new entry
+    await addToHistory({
+        ...data,
+        status: 'reserved'
+    });
     // Send success notification
     chrome.notifications.create({
         type: 'basic',

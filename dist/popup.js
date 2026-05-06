@@ -189,9 +189,16 @@ async function loadHistory() {
             }
             const title = item.title && item.title !== 'Unknown Study' ? item.title : `Study ${item.id.substring(0, 8)}...`;
             const researcher = item.researcher && item.researcher !== 'Unknown Researcher' ? item.researcher : '';
+            const status = item.status || 'detected';
+            const statusColor = status === 'reserved' ? '#10b981' : '#6b7280';
+            const statusText = status === 'reserved' ? 'RESERVED' : 'DETECTED';
+            const studyLink = item.url || `https://app.prolific.com/studies/${item.id}`;
             return `
                 <div class="history-item">
-                    <div style="font-weight: bold; margin-bottom: 4px; color: #1e3a8a;">${title}</div>
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;">
+                        <a href="${studyLink}" target="_blank" style="font-weight: bold; color: #1e3a8a; text-decoration: none; flex: 1; margin-right: 8px;">${title}</a>
+                        <span style="font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: ${statusColor}15; color: ${statusColor}; border: 1px solid ${statusColor}30;">${statusText}</span>
+                    </div>
                     ${researcher ? `<div style="font-size: 11px; margin-bottom: 4px; color: #4b5563;">${researcher}</div>` : ''}
                     <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
                         <span>Pay: <strong>${payStr}</strong>${payHourStr}</span>

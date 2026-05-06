@@ -235,14 +235,37 @@ function findStudyCards() {
     }
     return cards;
 }
+function extractStudyDataFromCard(card) {
+    try {
+        const titleEl = card.querySelector('h3, .title, [class*="title"]');
+        const researcherEl = card.querySelector('.researcher, [class*="researcher"]');
+        const rewardEl = card.querySelector('.reward, [class*="reward"], .pay');
+        // Find study ID from any link inside the card
+        const link = card.querySelector('a[href*="/studies/"]');
+        const idMatch = link?.getAttribute('href')?.match(/\/studies\/([a-f0-9]+)/i);
+        const id = idMatch ? idMatch[1] : `dom-${Math.floor(Math.random() * 1000)}`;
+        return {
+            id,
+            name: titleEl?.textContent?.trim() || 'Unknown Study',
+            researcher: { name: researcherEl?.textContent?.trim() || 'Unknown Researcher' },
+            reward: rewardEl?.textContent?.trim() ? parseFloat(rewardEl.textContent.replace(/[^0-9.]/g, '')) * 100 : 0,
+            url: link ? (window.location.origin + link.getAttribute('href')) : null
+        };
+    }
+    catch (e) {
+        return null;
+    }
+}
 // ======================== STUDY DETECTION ========================
 function onStudyDetected(source) {
     if (!isTargetPage())
         return;
     log(`🔔 Study detected via ${source}!`);
-    // Check for errors first
     if (checkStudyFull())
         return;
+    // Try to extract data for ALL current study cards for history
+    const cards = findStudyCards();
+    const detectedStudies = cards.map(c => extractStudyDataFromCard(c)).filter(d => d !== null);
     const clicked = tryAutoReserve();
     if (clicked > 0) {
         log(`✅ Auto-reserved ${clicked} studies via ${source}`);
@@ -250,11 +273,28 @@ function onStudyDetected(source) {
     else {
         startFastPolling();
     }
-    // Only notify if we haven't already notified for this exact study count, to prevent spam
-    const currentCount = findStudyCards().length;
-    if (currentCount > lastStudyCount) {
-        notifyBg('studies-detected', { source, count: currentCount });
-        lastStudyCount = currentCount;
+    // Notify background with the study data we found
+    if (detectedStudies.length > 0) {
+        for (const study of detectedStudies) {
+            // Only notify if we haven't already notified for this exact study recently
+            if (!knownStudyIds.has(study.id)) {
+                knownStudyIds.add(study.id);
+                notifyBg('studies-detected', {
+                    source,
+                    count: detectedStudies.length,
+                    id: study.id,
+                    study: study
+                });
+            }
+        }
+    }
+    else {
+        // Fallback for simple count notification if no specific data extracted
+        const currentCount = cards.length;
+        if (currentCount > lastStudyCount) {
+            notifyBg('studies-detected', { source, count: currentCount });
+            lastStudyCount = currentCount;
+        }
     }
 }
 function startFastPolling() {
