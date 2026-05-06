@@ -256,10 +256,18 @@ function updateStatus() {
             }
             statusCard.classList.remove("disconnected");
             statusText.textContent = response.enabled ? "Active & Monitoring" : "Paused";
+            // Get current studies on page
             if (studyCount)
                 studyCount.textContent = (response.studyCount || 0).toString();
-            if (reservedCount)
-                reservedCount.textContent = (response.reservedCount || 0).toString();
+            // Get TOTAL reserved today from history instead of just session count
+            chrome.storage.local.get('studyHistory', (res) => {
+                const history = res.studyHistory || [];
+                // Filter history for studies from today
+                const today = new Date().setHours(0, 0, 0, 0);
+                const todayCount = history.filter((h) => h.timestamp > today).length;
+                if (reservedCount)
+                    reservedCount.textContent = todayCount.toString();
+            });
             if (uptime)
                 uptime.textContent = formatUptime(response.uptime || 0);
         });
