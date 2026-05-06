@@ -118,10 +118,23 @@
             <div class="form-row">
                 <label for="aiModel" class="form-label-sm">Model</label>
                 <select id="aiModel" class="select-input">
-                    <option value="gpt-4o-mini">gpt-4o-mini (Fastest)</option>
-                    <option value="gpt-4o">gpt-4o (Smartest)</option>
-                    <option value="claude-3-haiku-20240307">Claude 3 Haiku</option>
-                    <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+                    <optgroup label="OpenAI (Direct)">
+                        <option value="gpt-4o-mini">gpt-4o-mini (Fast & Cheap)</option>
+                        <option value="gpt-4o">gpt-4o (Most Intelligent)</option>
+                    </optgroup>
+                    <optgroup label="Anthropic (OpenRouter)">
+                        <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+                        <option value="anthropic/claude-3-haiku">Claude 3 Haiku</option>
+                    </optgroup>
+                    <optgroup label="Google (OpenRouter)">
+                        <option value="google/gemini-flash-1.5">Gemini 1.5 Flash</option>
+                        <option value="google/gemini-pro-1.5">Gemini 1.5 Pro</option>
+                    </optgroup>
+                    <optgroup label="Open Source (OpenRouter)">
+                        <option value="meta-llama/llama-3.1-70b-instruct">Llama 3.1 70B</option>
+                        <option value="meta-llama/llama-3.1-8b-instruct">Llama 3.1 8B</option>
+                        <option value="mistralai/mistral-large">Mistral Large</option>
+                    </optgroup>
                 </select>
             </div>
         </div>
