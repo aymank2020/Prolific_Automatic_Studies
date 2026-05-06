@@ -43,6 +43,13 @@ const CONFIG = {
         'study has been paused',
         'study has ended',
     ],
+    LIMITED_CAPACITY_TEXT: [
+        'only allows',
+        'at a time',
+        'currently full',
+        'try again soon',
+        'limited capacity'
+    ],
     RATE_LIMIT_TEXT: [
         '429',
         'too many requests',
@@ -89,6 +96,15 @@ function check404AndRedirect() {
 }
 function checkStudyFull() {
     const bodyText = (document.body?.textContent || '').toLowerCase();
+    // First, check for LIMITED CAPACITY (Temporary)
+    for (const text of CONFIG.LIMITED_CAPACITY_TEXT) {
+        if (bodyText.includes(text)) {
+            log(`🟡 Limited Capacity detected: "${text}". Waiting to retry...`);
+            handleLimitedCapacity();
+            return true;
+        }
+    }
+    // Then, check for PERMANENTLY FULL
     for (const text of CONFIG.STUDY_FULL_TEXT) {
         if (bodyText.includes(text)) {
             const isSpecificStudy = getStudyIdFromUrl() !== null;
@@ -109,6 +125,28 @@ function checkStudyFull() {
         }
     }
     return false;
+}
+let limitedCapacityTimer = null;
+function handleLimitedCapacity() {
+    if (limitedCapacityTimer)
+        return;
+    updateIndicator('warn', 'Limited Capacity - Retrying...');
+    // Strategy: Try to click the 'Start study' button every 10 seconds
+    // or refresh every 30 seconds if button not found
+    let attempts = 0;
+    limitedCapacityTimer = setInterval(() => {
+        attempts++;
+        log(`🔄 Limited Capacity Retry #${attempts}`);
+        const buttons = findReserveButtons();
+        if (buttons.length > 0) {
+            log('🎯 Found Start button, clicking...');
+            buttons[0].click();
+        }
+        else if (attempts % 3 === 0) {
+            log('🔄 Refreshing page to clear error state...');
+            window.location.reload();
+        }
+    }, 10000);
 }
 function checkRateLimit() {
     const pageText = document.body.innerText.toLowerCase();
@@ -566,6 +604,24 @@ function addIndicator() {
         el.classList.toggle('off', !isEnabled);
     });
     document.body.appendChild(el);
+}
+function updateIndicator(type, text) {
+    const el = document.getElementById('prolific-auto-indicator');
+    if (!el)
+        return;
+    el.title = text;
+    if (type === 'warn') {
+        el.style.background = 'rgba(255,152,0,0.9)';
+        el.innerHTML = '⏳';
+    }
+    else if (type === 'error') {
+        el.style.background = 'rgba(244,67,54,0.9)';
+        el.innerHTML = '⚠️';
+    }
+    else {
+        el.style.background = 'rgba(0,200,83,0.9)';
+        el.innerHTML = '🚀';
+    }
 }
 // ======================== INIT ========================
 function init() {
