@@ -267,34 +267,55 @@ function setupSolverObserver() {
 }
 
 /**
- * NEW: Sniff for Prolific Completion Codes
+ * NEW: DEEP Sniff for Prolific Completion Codes
  */
 function sniffCompletionCode() {
-    const bodyText = document.body.innerText;
-    
-    // Pattern: 8-character uppercase alphanumeric (common Prolific code)
-    // Often near words like 'Completion', 'Code', 'Prolific'
+    // 1. Search in URL Parameters (Highest priority)
+    const urlParams = new URLSearchParams(window.location.search);
+    const codeInUrl = urlParams.get('cc') || urlParams.get('completion_code') || urlParams.get('code');
+    if (codeInUrl && /^[A-Z0-9]{8}$/.test(codeInUrl)) {
+        logCapturedCode(codeInUrl, 'URL');
+        return;
+    }
+
+    // 2. Search in visible text + hidden HTML source
+    const fullContent = document.documentElement.innerHTML;
     const codeRegex = /\b([A-Z0-9]{8})\b/g;
     let match;
     
-    while ((match = codeRegex.exec(bodyText)) !== null) {
+    while ((match = codeRegex.exec(fullContent)) !== null) {
         const code = match[1];
-        // Skip common words that might match (optional, but good for accuracy)
         if (/^[0-9]+$/.test(code)) continue; // Skip all numbers
         
-        // If context looks like a completion page
-        const context = bodyText.substring(Math.max(0, match.index - 50), Math.min(bodyText.length, match.index + 50)).toLowerCase();
-        if (context.includes('completion') || context.includes('code') || context.includes('finish') || context.includes('prolific')) {
-            solverLog('🎯 Completion Code Detected:', code);
-            chrome.runtime.sendMessage({
-                target: 'background',
-                type: 'completion-code-detected',
-                data: { code, url: window.location.href }
-            });
-            updateStatusUI('done', 'Code Captured: ' + code);
-            break;
+        // Search around the code for context keywords
+        const index = match.index;
+        const context = fullContent.substring(Math.max(0, index - 100), Math.min(fullContent.length, index + 100)).toLowerCase();
+        
+        if (context.includes('completion') || context.includes('code') || context.includes('finish') || context.includes('prolific') || context.includes('cc=')) {
+            logCapturedCode(code, 'HTML Source');
+            return;
         }
     }
+
+    // 3. Search in hidden inputs
+    const hiddenInputs = document.querySelectorAll('input[type="hidden"]');
+    for (const input of Array.from(hiddenInputs)) {
+        const val = (input as HTMLInputElement).value;
+        if (val && /^[A-Z0-9]{8}$/.test(val)) {
+            logCapturedCode(val, 'Hidden Input');
+            return;
+        }
+    }
+}
+
+function logCapturedCode(code: string, source: string) {
+    solverLog(`🎯 Completion Code Captured via ${source}:`, code);
+    chrome.runtime.sendMessage({
+        target: 'background',
+        type: 'completion-code-detected',
+        data: { code, url: window.location.href }
+    });
+    updateStatusUI('done', 'Code Captured: ' + code);
 }
 
 // Start
