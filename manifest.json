@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Prolific Studies Notifier",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Auto-detect and reserve Prolific studies. Monitors WhatsApp Web groups for study links.",
 
   "permissions": [
