@@ -114,6 +114,8 @@ function checkStudyFull(): boolean {
         }
     }
     return false;
+}
+
 function checkRateLimit(): boolean {
     const pageText = document.body.innerText.toLowerCase();
     for (const pattern of CONFIG.RATE_LIMIT_TEXT) {
