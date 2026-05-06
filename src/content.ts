@@ -483,9 +483,11 @@ function setupAutoRefresh() {
 }
 
 function startPolling() {
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(() => {
-        if (check404AndRedirect()) return;
+    if (pollTimer) clearTimeout(pollTimer);
+    
+    const runPoll = () => {
+        if (checkRateLimit() || check404AndRedirect()) return;
+        
         const cards = findStudyCards();
         if (cards.length > lastStudyCount) {
             log(`📊 Poll: ${lastStudyCount} → ${cards.length} studies`);
@@ -495,7 +497,13 @@ function startPolling() {
             tryAutoReserve();
         }
         lastStudyCount = cards.length;
-    }, CONFIG.POLL_INTERVAL);
+        
+        // Schedule next poll with jitter (2-4 seconds)
+        const nextInterval = CONFIG.POLL_INTERVAL + (Math.random() * 2000);
+        pollTimer = setTimeout(runPoll, nextInterval);
+    };
+    
+    pollTimer = setTimeout(runPoll, CONFIG.POLL_INTERVAL);
 }
 
 // ======================== COMMUNICATION ========================

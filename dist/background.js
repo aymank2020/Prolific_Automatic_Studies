@@ -72,14 +72,18 @@ chrome.runtime.onStartup.addListener(async function () {
 });
 // ======================== ALARMS ========================
 function setupAlarms() {
-    // Regular poll every 60 seconds (increased to avoid rate limits)
+    // Random interval between 2 and 4 minutes to look more human
+    const delay = 2 + Math.random() * 2;
     chrome.alarms.create(POLL_ALARM_NAME, {
-        periodInMinutes: 1.0,
+        delayInMinutes: delay,
     });
+    console.log(`[Background] Next human-like poll in ${delay.toFixed(2)} minutes`);
 }
 chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === POLL_ALARM_NAME) {
         await checkProlificTab();
+        // Reschedule for next random time
+        setupAlarms();
     }
     if (alarm.name === FAST_POLL_ALARM_NAME) {
         await triggerContentScriptCheck();
