@@ -539,4 +539,7 @@ async function queryAI(userPrompt: string, systemPrompt: string): Promise<string
     }
 }
 
+// Start hydration immediately on service worker wake-up
+hydrateCachedSettings();
+
 // End of Background Script
