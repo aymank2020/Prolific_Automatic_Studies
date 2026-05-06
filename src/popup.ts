@@ -249,7 +249,7 @@ async function loadHistory() {
 
 // ======================== LIVE STATUS ========================
 
-async function updateStatus(): Promise<void> {
+async function updateStatus(isInitial = false): Promise<void> {
     const statusCard = document.getElementById("statusCard");
     const statusText = document.getElementById("statusText");
     const studyCount = document.getElementById("studyCount");
@@ -258,9 +258,10 @@ async function updateStatus(): Promise<void> {
 
     if (!statusCard || !statusText) return;
 
-    // 1. Ensure Background Service Worker is awake
+    // 1. Ensure Background Service Worker is awake (Up to 10 retries on initial load)
     let bgReady = false;
-    for (let i = 0; i < 3; i++) {
+    const bgRetries = isInitial ? 10 : 3;
+    for (let i = 0; i < bgRetries; i++) {
         try {
             const res = await new Promise((resolve) => {
                 chrome.runtime.sendMessage({ target: 'background', type: 'ping' }, (response) => {
@@ -270,24 +271,18 @@ async function updateStatus(): Promise<void> {
             });
             if (res) { bgReady = true; break; }
         } catch (e) {}
-        await new Promise(r => setTimeout(r, 200));
+        await new Promise(r => setTimeout(r, isInitial ? 300 : 100));
     }
 
-    if (!bgReady) {
+    if (!bgReady && isInitial) {
         statusCard.classList.add("disconnected");
-        statusText.textContent = "Background waking up...";
-        // We don't return here, we'll let the next interval try again
+        statusText.textContent = "Background sleeping...";
+        return;
     }
 
     // 2. Query for Prolific tab
     chrome.tabs.query({ url: "*://*.prolific.com/*" }, async (tabs) => {
-        if (chrome.runtime.lastError) {
-            statusText.textContent = "Query Error";
-            statusCard.classList.add("disconnected");
-            return;
-        }
-
-        if (tabs.length === 0) {
+        if (chrome.runtime.lastError || tabs.length === 0) {
             statusCard.classList.add("disconnected");
             statusText.textContent = "No Prolific tab open";
             return;
@@ -296,9 +291,10 @@ async function updateStatus(): Promise<void> {
         const targetTab = tabs[0];
         if (!targetTab.id) return;
 
-        // 3. Try to contact Content Script with retries (for the very first load)
+        // 3. Try to contact Content Script with retries (Up to 10 retries on initial load)
         let response = null;
-        for (let i = 0; i < 3; i++) {
+        const csRetries = isInitial ? 10 : 3;
+        for (let i = 0; i < csRetries; i++) {
             response = await new Promise((resolve) => {
                 chrome.tabs.sendMessage(targetTab.id!, {
                     target: 'content-script',
@@ -309,7 +305,7 @@ async function updateStatus(): Promise<void> {
                 });
             });
             if (response) break;
-            await new Promise(r => setTimeout(r, 300));
+            await new Promise(r => setTimeout(r, isInitial ? 500 : 200));
         }
 
         if (!response) {
@@ -380,8 +376,8 @@ document.addEventListener('DOMContentLoaded', async function () {
     await setupAISettings();
 
     // Live status updates
-    updateStatus();
-    setInterval(updateStatus, 3000);
+    updateStatus(true);
+    setInterval(() => updateStatus(false), 3000);
     
     // Initial history load
     loadHistory();

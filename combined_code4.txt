@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Prolific Studies Notifier",
-  "version": "2.0.3",
-  "description": "Auto-detect and reserve Prolific studies. Monitors WhatsApp Web groups for study links.",
+  "name": "Ayman Prolific Studies Notifier",
+  "version": "2.0.4",
+  "description": "Premium automated notifier and reservation system for Prolific studies.",
 
   "permissions": [
     "storage",
@@ -41,13 +41,13 @@
 
   "action": {
     "default_popup": "popup/popup.html",
-    "title": "Prolific get studies automatically"
+    "title": "Ayman Prolific Notifier"
   },
 
   "icons": {
-    "16": "imgs/logo.png",
-    "48": "imgs/logo.png",
-    "128": "imgs/logo.png"
+    "16": "imgs/icon16.png",
+    "48": "imgs/icon48.png",
+    "128": "imgs/icon128.png"
   }
 }
 /**
@@ -296,14 +296,40 @@ function findStudyCards(): Element[] {
     return cards;
 }
 
+function extractStudyDataFromCard(card: Element) {
+    try {
+        const titleEl = card.querySelector('h3, .title, [class*="title"]');
+        const researcherEl = card.querySelector('.researcher, [class*="researcher"]');
+        const rewardEl = card.querySelector('.reward, [class*="reward"], .pay');
+        
+        // Find study ID from any link inside the card
+        const link = card.querySelector('a[href*="/studies/"]');
+        const idMatch = link?.getAttribute('href')?.match(/\/studies\/([a-f0-9]+)/i);
+        const id = idMatch ? idMatch[1] : `dom-${Math.floor(Math.random()*1000)}`;
+        
+        return {
+            id,
+            name: titleEl?.textContent?.trim() || 'Unknown Study',
+            researcher: { name: researcherEl?.textContent?.trim() || 'Unknown Researcher' },
+            reward: rewardEl?.textContent?.trim() ? parseFloat(rewardEl.textContent.replace(/[^0-9.]/g, '')) * 100 : 0,
+            url: link ? (window.location.origin + link.getAttribute('href')) : null
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
 // ======================== STUDY DETECTION ========================
 
 function onStudyDetected(source: string) {
     if (!isTargetPage()) return;
     
     log(`🔔 Study detected via ${source}!`);
-    // Check for errors first
     if (checkStudyFull()) return;
+    
+    // Try to extract data for ALL current study cards for history
+    const cards = findStudyCards();
+    const detectedStudies = cards.map(c => extractStudyDataFromCard(c)).filter(d => d !== null);
     
     const clicked = tryAutoReserve();
     if (clicked > 0) {
@@ -312,11 +338,27 @@ function onStudyDetected(source: string) {
         startFastPolling();
     }
     
-    // Only notify if we haven't already notified for this exact study count, to prevent spam
-    const currentCount = findStudyCards().length;
-    if (currentCount > lastStudyCount) {
-        notifyBg('studies-detected', { source, count: currentCount });
-        lastStudyCount = currentCount;
+    // Notify background with the study data we found
+    if (detectedStudies.length > 0) {
+        for (const study of detectedStudies) {
+            // Only notify if we haven't already notified for this exact study recently
+            if (!knownStudyIds.has(study!.id)) {
+                knownStudyIds.add(study!.id);
+                notifyBg('studies-detected', { 
+                    source, 
+                    count: detectedStudies.length,
+                    id: study!.id,
+                    study: study
+                });
+            }
+        }
+    } else {
+        // Fallback for simple count notification if no specific data extracted
+        const currentCount = cards.length;
+        if (currentCount > lastStudyCount) {
+            notifyBg('studies-detected', { source, count: currentCount });
+            lastStudyCount = currentCount;
+        }
     }
 }
 
@@ -618,7 +660,7 @@ const VOLUME = "volume";
 const COUNTER = "counter";
 const AUTO_RESERVE = "autoReserveEnabled";
 const ICON_URL = 'imgs/logo.png';
-const TITLE = 'Prolific Automatic Studies';
+const TITLE = 'Ayman Prolific Notifier';
 const MESSAGE = 'A new study has been posted on Prolific!';
 const PROLIFIC_TITLE = 'prolificTitle';
 
@@ -733,6 +775,9 @@ async function handleMessages(message: { target: string; type: any; data?: any; 
     }
 
     switch (message.type) {
+        case 'ping':
+            sendResponse({ status: 'alive' });
+            break;
         case 'play-sound':
             audio = await getValueFromStorage(AUDIO, 'alert1.mp3');
             volume = await getValueFromStorage(VOLUME, 100) / 100;
@@ -836,23 +881,32 @@ async function addToHistory(data: any) {
         const history: any[] = await getValueFromStorage<any[]>('studyHistory', []);
         
         let studyInfo = data.study || {};
+        const studyId = data.id || studyInfo.id || 'unknown';
+        
+        // Generate Prolific URL
+        const url = studyId !== 'unknown' ? `https://app.prolific.com/studies/${studyId}` : null;
         
         history.unshift({
             timestamp: Date.now(),
             count: data.count || 1,
-            id: data.id || studyInfo.id || 'unknown',
-            title: studyInfo.name || 'Unknown Study',
+            id: studyId,
+            title: studyInfo.name || studyInfo.title || 'Unknown Study',
             researcher: studyInfo.researcher?.name || 'Unknown Researcher',
-            pay: studyInfo.reward || 0,
-            payPerHour: studyInfo.estimated_reward_per_hour || 0,
-            duration: studyInfo.estimated_completion_time || 0,
+            pay: studyInfo.reward || studyInfo.pay || 0,
+            payPerHour: studyInfo.estimated_reward_per_hour || studyInfo.payPerHour || 0,
+            duration: studyInfo.estimated_completion_time || studyInfo.duration || 0,
             places: studyInfo.total_available_places || 0,
-            source: data.source || 'auto'
+            source: data.source || 'auto',
+            url: data.url || url,
+            status: data.status || 'detected'
         });
-        // Keep only last 50 studies for a richer history
-        if (history.length > 50) history.length = 50;
+        
+        // Keep only last 100 studies for a richer history
+        if (history.length > 100) history.length = 100;
         await chrome.storage.local.set({ studyHistory: history });
-    } catch (e) {}
+    } catch (e) {
+        console.error('[Background] Error adding to history:', e);
+    }
 }
 
 // ======================== STUDY HANDLERS ========================
@@ -874,6 +928,13 @@ async function handleStudiesDetected(data: any): Promise<void> {
         await updateBadge(data.count);
     }
 
+    // Log to history as detected
+    await addToHistory({
+        ...data,
+        source: data.source || 'content-script',
+        status: 'detected'
+    });
+
     // Bring Prolific tab to front
     await focusProlificTab();
 }
@@ -881,6 +942,12 @@ async function handleStudiesDetected(data: any): Promise<void> {
 async function handleStudyReserved(data: any): Promise<void> {
     const count = data?.count || 1;
     await updateCounterAndBadge(count);
+
+    // Update history status to reserved if it exists, or add new entry
+    await addToHistory({
+        ...data,
+        status: 'reserved'
+    });
 
     // Send success notification
     chrome.notifications.create({
