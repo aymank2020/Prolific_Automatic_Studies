@@ -1,239 +1,109 @@
-# 🚀 Prolific Auto-Reserve Extension
+# 🚀 Ayman Prolific Studies Notifier (v2.2.0)
 
 <p align="center">
-  <img src="imgs/logo.png" alt="Prolific Auto-Reserve" height="80">
+  <img src="imgs/logo.png" alt="Ayman Prolific Notifier" height="100">
 </p>
 
 <p align="center">
-  <strong>Lightning-fast study detection & auto-reservation for Prolific</strong><br>
-  <em>Detect studies in ~15ms • Auto-click "Take part" • WhatsApp group monitoring</em>
+  <strong>The ultimate Prolific assistant: Smart Auto-Reserve, AI Solving, and WhatsApp Monitoring</strong><br>
+  <em>Premium Design • Randomized Jitter • Limited Capacity Retry • Human Behavior Simulation</em>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.0.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.2.0-gold" alt="Version">
   <img src="https://img.shields.io/badge/manifest-v3-green" alt="Manifest V3">
-  <img src="https://img.shields.io/badge/TypeScript-5.3-blue" alt="TypeScript">
-  <img src="https://img.shields.io/badge/Chrome-Extension-yellow" alt="Chrome Extension">
+  <img src="https://img.shields.io/badge/AI-Solver-blueviolet" alt="AI Solver">
+  <img src="https://img.shields.io/badge/Anti--Ban-Protected-green" alt="Anti-Ban">
 </p>
 
 ---
 
-## ✨ Features
+## ✨ New in v2.2.0: "Smart Resilience"
 
-### ⚡ Auto-Reserve Engine
-- **6-layer study detection** — catches new studies in milliseconds
-- **Instant auto-click** on "Take part in this study" button
-- **Multiple click methods** (direct, MouseEvent, PointerEvent) for React compatibility
-- **Fast polling fallback** (50ms) when buttons aren't immediately available
+### 🛡️ Human Behavior Simulation (Anti-Ban)
+- **Randomized Jitter:** No more fixed polling. Background checks occur every 2-4 minutes randomly, and foreground checks every 2-4 seconds with jitter.
+- **Rate Limit Protection:** Automatically detects `429 - Too Many Requests` errors and pauses all automation for 30 minutes to protect your account from suspension.
+
+### 🔄 Limited Capacity "Chasing" Mode
+- **Smart Detection:** Automatically detects studies that are temporarily full ("Limited Capacity").
+- **🔄 Auto-Chasing:** Instead of closing the tab, the extension enters a spinning "Chasing Mode", performing randomized refreshes (3-7s) until a spot opens up.
+
+### 🤖 AI Auto-Solver (Optional)
+- **Intelligent Answering:** Uses GPT-4o to analyze survey questions in real-time.
+- **Attention Trap Detection:** Specifically designed to catch and correctly answer "attention checks" to protect your Prolific standing.
+- **Shadow Mode:** View AI suggestions without auto-clicking.
+
+### ⚡ Ultra-Robust Connection
+- **Zero "Error Connecting":** Implements a 10-retry "Smart Wake-up" sequence for the Service Worker, ensuring the extension works instantly every time you open it.
+
+---
+
+## 🚀 Core Features
 
 ### 📱 WhatsApp Web Integration
-- **Monitors WhatsApp Web groups** for Prolific study links
-- **Auto-opens study links** in a new focused tab the moment they appear
-- **Visual notification banner** inside WhatsApp when a study is detected
-- **Audio alert** when a new study link is found
+- **Real-time Monitoring:** Scans WhatsApp Web groups for Prolific study links.
+- **Instant Auto-Open:** Opens links in a focused tab the moment they are posted.
+- **Visual Feedback:** Shows a 📱 indicator and slide-down banners inside WhatsApp.
 
-### 🔔 Smart Notifications
-- Desktop notifications with one-click access to Prolific
-- Customizable audio alerts (3 built-in sounds)
-- Badge counter for detected studies
-- Auto-focus Prolific tab when studies appear
+### ⚡ Advanced Reserve Engine
+- **6-Layer Detection:** Combines Fetch/XHR interception, MutationObservers, and Navigation monitoring.
+- **Multi-Method Clicking:** Uses direct DOM clicks + Mouse/Pointer events for maximum compatibility with Prolific's React frontend.
 
-### 🛡️ Error Handling
-- **404 auto-redirect** — if a study is expired, automatically returns to `/studies`
-- **"Study is full" detection** — redirects to studies list when a study fills up
-- **Connection recovery** — re-initializes detection when tab becomes visible
+### 📊 Professional History & Dashboard
+- **Detailed Tracking:** View a log of all detected and reserved studies.
+- **One-Click Access:** Direct links to Prolific studies from your history.
+- **Status Badges:** Clearly see which studies were `RESERVED` vs `DETECTED`.
 
 ---
 
 ## 🏗️ Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Chrome Extension (MV3)                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────┐  │
-│  │  Background.js   │  │   Content.js     │  │  WhatsApp    │  │
-│  │  (Service Worker) │  │ (Prolific Page)  │  │  Monitor.js  │  │
-│  │                  │  │                  │  │              │  │
-│  │ • Alarms (30s)   │◄─┤ • MutationObs    │  │ • Link scan  │  │
-│  │ • Tab management │  │ • API intercept  │  │ • MutationObs│  │
-│  │ • Notifications  │  │ • DOM polling    │  │ • Auto-open  │  │
-│  │ • Audio playback │  │ • Nav monitor    │  │ • Notify BG  │  │
-│  │ • Badge updates  │  │ • Auto-click     │  │              │  │
-│  └──────┬───────────┘  └──────────────────┘  └──────┬───────┘  │
-│         │                                           │          │
-│         └───────────────────┬───────────────────────┘          │
-│                             │                                   │
-│                    ┌────────┴────────┐                          │
-│                    │   Popup.html    │                          │
-│                    │ • Toggle on/off │                          │
-│                    │ • Status display│                          │
-│                    │ • Force check   │                          │
-│                    │ • Audio config  │                          │
-│                    └─────────────────┘                          │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Detection Layers (by speed)
-
-| # | Layer | Latency | Description |
-|---|-------|---------|-------------|
-| 1 | **Fetch Interception** | ~0ms | Intercepts API responses before DOM renders |
-| 2 | **XHR Interception** | ~0ms | Catches XMLHttpRequest-based API calls |
-| 3 | **MutationObserver** | ~10ms | Instant DOM change detection |
-| 4 | **Navigation Monitor** | ~100ms | Detects SPA route changes |
-| 5 | **Regular Polling** | ~500ms | Safety net for missed events |
-| 6 | **Background Alarms** | ~30s | Catches studies when service worker sleeps |
+| Layer | Latency | Description |
+|---|---|---|
+| **API Interception** | ~0ms | Catches studies before they even render on the page. |
+| **MutationObserver** | ~10ms | Instant DOM change detection for new study cards. |
+| **Human Polling** | 2s + Jitter | Periodic safety check with randomized timing. |
+| **WA Monitor** | 500ms | DOM scanning for WhatsApp Web link detection. |
+| **Background Alarm** | 2-4min | Randomized background wake-up for persistent monitoring. |
 
 ---
 
 ## 📦 Installation
 
-### From Source (Developer Mode)
-
-1. **Clone the repository:**
+1. **Clone & Build:**
    ```bash
    git clone https://github.com/aymank2020/Prolific_Automatic_Studies.git
    cd ProlificAutomaticStudies
+   npm install && npx tsc
    ```
-
-2. **Install dependencies & build:**
-   ```bash
-   npm install
-   npx tsc
-   ```
-
-3. **Load in Chrome:**
-   - Open `chrome://extensions/`
-   - Enable **Developer mode** (toggle in top-right)
-   - Click **"Load unpacked"**
-   - Select the project folder
-
-4. **Setup:**
-   - Open [app.prolific.com/studies](https://app.prolific.com/studies) — you'll see a 🚀 indicator
-   - Open [web.whatsapp.com](https://web.whatsapp.com) — you'll see a 📱 indicator
-   - Click the extension icon to configure settings
-
----
-
-## 🎮 Usage
-
-### On Prolific (app.prolific.com)
-- **🚀 Green indicator** = Auto-reserve is active
-- **🔴 Red indicator** = Auto-reserve is disabled
-- Click the indicator to toggle on/off
-- Studies are auto-reserved the instant they appear
-
-### On WhatsApp Web (web.whatsapp.com)
-- **📱 Green indicator** = WhatsApp monitor is active
-- When a Prolific study link appears in any chat, it auto-opens in a new tab
-- A blue notification banner slides down when a study is detected
-- Existing links at page load are marked as "seen" (not auto-opened)
-
-### Popup Controls
-- **⚡ Auto-Reserve Studies** — master toggle for auto-reservation
-- **🔍 Force Check** — manually trigger an immediate study check
-- **Status** — live connection status with the content script
-- **Reserved** — count of studies auto-reserved this session
-
----
-
-## 📁 Project Structure
-
-```
-ProlificAutomaticStudies/
-├── manifest.json           # Extension manifest (MV3)
-├── package.json            # Dependencies
-├── tsconfig.json           # TypeScript configuration
-├── src/
-│   ├── background.ts       # Service worker (alarms, notifications, tab mgmt)
-│   ├── content.ts          # Prolific page auto-reserve engine
-│   ├── whatsapp-monitor.ts # WhatsApp Web link monitor
-│   └── popup.ts            # Popup interface logic
-├── dist/                   # Compiled JavaScript (auto-generated)
-│   ├── background.js
-│   ├── content.js
-│   ├── whatsapp-monitor.js
-│   └── popup.js
-├── popup/
-│   └── popup.html          # Extension popup interface
-├── styles/
-│   └── popup.css           # Popup styling
-├── audio/
-│   ├── alert1.mp3          # Notification sounds
-│   ├── alert2.mp3
-│   ├── alert3.mp3
-│   ├── audio.html          # Offscreen audio player
-│   └── audio.js            # Audio playback handler
-└── imgs/
-    └── logo.png            # Extension icon
-```
-
----
-
-## 🔧 Development
-
-### Build
-```bash
-npm install
-npx tsc          # Compile TypeScript
-npx tsc --watch  # Watch mode for development
-```
-
-### Key Technologies
-- **TypeScript 5.3** — Type-safe development
-- **Chrome Extension Manifest V3** — Modern extension architecture
-- **MutationObserver API** — Real-time DOM monitoring
-- **Fetch/XHR Interception** — API response monitoring
-- **Chrome Alarms API** — Reliable periodic checks
-- **Offscreen Document** — Background audio playback
-
----
-
-## ⚙️ Configuration
-
-All settings are persisted via `chrome.storage.sync`:
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `autoReserveEnabled` | `true` | Enable/disable auto-reservation |
-| `audioActive` | `true` | Play sound on new study |
-| `showNotification` | `true` | Show desktop notification |
-| `openProlific` | `false` | Open Prolific on browser startup |
-| `volume` | `100` | Audio volume (0-100) |
-| `audio` | `alert1.mp3` | Selected alert sound |
+2. **Load in Chrome:**
+   - Go to `chrome://extensions/` -> Enable **Developer mode**.
+   - Click **Load unpacked** -> Select the project folder.
+3. **Configure:**
+   - Open Prolific (🚀 indicator appears).
+   - Open WhatsApp Web (📱 indicator appears).
+   - Use the popup to set your **AI API Key** and preferences.
 
 ---
 
 ## 📋 Changelog
 
-### v2.0.0 (Current)
-- ✅ **Content Script** — auto-reserve engine injected into Prolific pages
-- ✅ **WhatsApp Monitor** — detects study links from WhatsApp Web groups
-- ✅ **API Interception** — catches studies from fetch/XHR responses
-- ✅ **MutationObserver** — instant DOM change detection (~10ms)
-- ✅ **404 Handling** — auto-redirect on expired studies
-- ✅ **"Study Full" Handling** — redirect when study fills up
-- ✅ **Multi-click** — 3 click methods for React compatibility
-- ✅ **Chrome Alarms** — reliable background checking
-- ✅ **Visual indicators** — 🚀 on Prolific, 📱 on WhatsApp
+### v2.2.0 (Current)
+- ✅ **Randomized Jitter** — Bypasses bot detection by mimicking human timing.
+- ✅ **Limited Capacity Mode** — Smart retries for temporarily full studies.
+- ✅ **Anti-Ban Protection** — 429 error detection and emergency cooling.
+- ✅ **Spinning UI Indicator** — Real-time visual feedback for active "chasing".
+- ✅ **10-Retry Wake-up** — Fixed the "Error Connecting" startup issue.
 
-### v1.0.6 (Original)
-- Notification-only extension
-- Tab title monitoring for study detection
-- Audio alerts and desktop notifications
+### v2.1.0
+- ✅ **AI Solver Integration** — GPT-4o powered survey answering.
+- ✅ **Enhanced History UI** — Professional table view with direct links.
+- ✅ **Flat Design Icons** — New high-clarity icon set.
 
 ---
 
-## 📄 License
-
-This project is for educational and personal use.
+## 📄 License & Disclaimer
+This project is for educational and personal use. Use at your own risk. Automating Prolific may violate their Terms of Service; use conservative settings to minimize risk.
 
 ## 🤝 Contributing
-
-Contributions are welcome! Feel free to open issues or submit pull requests.
-
-## 📬 Contact
-
-For questions or suggestions, open an issue on [GitHub](https://github.com/aymank2020/Prolific_Automatic_Studies).
+Contributions are welcome! Open an issue or submit a pull request on [GitHub](https://github.com/aymank2020/Prolific_Automatic_Studies).
