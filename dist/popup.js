@@ -254,36 +254,50 @@ function loadHistory() {
 // ======================== LIVE STATUS ========================
 function updateStatus() {
     const statusCard = document.getElementById("statusCard");
-    const statusDot = document.getElementById("statusDot");
     const statusText = document.getElementById("statusText");
     const studyCount = document.getElementById("studyCount");
     const reservedCount = document.getElementById("reservedCount");
     const uptime = document.getElementById("uptime");
-    // Try to get status from content script via background
-    chrome.tabs.query({ url: "https://app.prolific.com/*" }, (tabs) => {
-        if (tabs.length === 0 || !tabs[0].id) {
-            // No Prolific tab
-            if (statusCard)
-                statusCard.classList.add("disconnected");
-            if (statusText)
-                statusText.textContent = "No Prolific tab open";
+    if (!statusCard || !statusText)
+        return;
+    // Use a broader query to ensure we find the Prolific tab
+    chrome.tabs.query({ url: "*://*.prolific.com/*" }, (tabs) => {
+        if (chrome.runtime.lastError) {
+            statusText.textContent = "Query Error: " + chrome.runtime.lastError.message;
+            statusCard.classList.add("disconnected");
             return;
         }
-        chrome.tabs.sendMessage(tabs[0].id, {
+        if (tabs.length === 0) {
+            statusCard.classList.add("disconnected");
+            statusText.textContent = "No Prolific tab open";
+            return;
+        }
+        // Try the first available tab
+        const targetTab = tabs[0];
+        if (!targetTab.id)
+            return;
+        chrome.tabs.sendMessage(targetTab.id, {
             target: 'content-script',
             type: 'get-status',
         }, (response) => {
-            if (chrome.runtime.lastError || !response) {
-                if (statusCard)
-                    statusCard.classList.add("disconnected");
-                if (statusText)
-                    statusText.textContent = "Content script not loaded";
+            if (chrome.runtime.lastError) {
+                statusCard.classList.add("disconnected");
+                const err = chrome.runtime.lastError.message || "";
+                if (err.includes("Could not establish connection")) {
+                    statusText.textContent = "Content Script missing (Refresh Prolific tab)";
+                }
+                else {
+                    statusText.textContent = "Error: " + err.substring(0, 30);
+                }
                 return;
             }
-            if (statusCard)
-                statusCard.classList.remove("disconnected");
-            if (statusText)
-                statusText.textContent = response.enabled ? "Active & Monitoring" : "Paused";
+            if (!response) {
+                statusCard.classList.add("disconnected");
+                statusText.textContent = "No response from page";
+                return;
+            }
+            statusCard.classList.remove("disconnected");
+            statusText.textContent = response.enabled ? "Active & Monitoring" : "Paused";
             if (studyCount)
                 studyCount.textContent = (response.studyCount || 0).toString();
             if (reservedCount)
