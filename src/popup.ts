@@ -343,42 +343,51 @@ function formatUptime(ms: number): string {
 
 // ======================== INIT ========================
 
-document.addEventListener('DOMContentLoaded', async function () {
-    // Clear badge
-    await chrome.runtime.sendMessage({
-        type: 'clear-badge',
-        target: 'background',
-    });
-
-    // Setup tabs
-    setupTabs();
-
-    // Original settings
-    const autoAudio = document.getElementById("autoAudio") as HTMLInputElement;
-    const selectAudio = document.getElementById("selectAudio") as HTMLSelectElement;
-    const counter = document.getElementById("counter") as HTMLSpanElement;
-    const playAudioBtn = document.getElementById("playAudio") as HTMLButtonElement;
-    const showNotification = document.getElementById("showNotification") as HTMLInputElement;
-    const volume = document.getElementById("volume") as HTMLInputElement;
-    const openProlific = document.getElementById("openProlific") as HTMLInputElement;
-
-    if (autoAudio) await setAudioCheckbox(autoAudio);
-    if (selectAudio) await setAudioOption(selectAudio);
-    if (counter) await setCounter(counter);
-    if (playAudioBtn) playAudioBtn.addEventListener("click", playAlert);
-    if (showNotification) await setShowNotification(showNotification);
-    if (openProlific) await setOpenProlific(openProlific);
-    if (volume) await setVolume(volume);
-
-    // New auto-reserve controls
-    await setupAutoReserve();
-    await setupForceCheck();
-    await setupAISettings();
-
-    // Live status updates
+document.addEventListener('DOMContentLoaded', function () {
+    // 1. START STATUS UPDATES IMMEDIATELY
     updateStatus(true);
-    setInterval(() => updateStatus(false), 3000);
-    
-    // Initial history load
-    loadHistory();
+    const statusInterval = setInterval(() => updateStatus(false), 3000);
+
+    // 2. RUN OTHER SETUP IN BACKGROUND (Don't block the UI)
+    const runSetup = async () => {
+        try {
+            // Clear badge
+            chrome.runtime.sendMessage({
+                type: 'clear-badge',
+                target: 'background',
+            }).catch(() => {});
+
+            // Setup tabs
+            setupTabs();
+
+            // Original settings
+            const autoAudio = document.getElementById("autoAudio") as HTMLInputElement;
+            const selectAudio = document.getElementById("selectAudio") as HTMLSelectElement;
+            const counter = document.getElementById("counter") as HTMLSpanElement;
+            const playAudioBtn = document.getElementById("playAudio") as HTMLButtonElement;
+            const showNotification = document.getElementById("showNotification") as HTMLInputElement;
+            const volume = document.getElementById("volume") as HTMLInputElement;
+            const openProlific = document.getElementById("openProlific") as HTMLInputElement;
+
+            if (autoAudio) await setAudioCheckbox(autoAudio).catch(() => {});
+            if (selectAudio) await setAudioOption(selectAudio).catch(() => {});
+            if (counter) await setCounter(counter).catch(() => {});
+            if (playAudioBtn) playAudioBtn.addEventListener("click", playAlert);
+            if (showNotification) await setShowNotification(showNotification).catch(() => {});
+            if (openProlific) await setOpenProlific(openProlific).catch(() => {});
+            if (volume) await setVolume(volume).catch(() => {});
+
+            // New auto-reserve controls
+            await setupAutoReserve().catch(() => {});
+            await setupForceCheck().catch(() => {});
+            await setupAISettings().catch(() => {});
+            
+            // Initial history load
+            loadHistory();
+        } catch (err) {
+            console.error("Popup setup error:", err);
+        }
+    };
+
+    runSetup();
 });
