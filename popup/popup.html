@@ -107,33 +107,46 @@
                     <span class="toggle-slider"></span>
                 </div>
             </label>
-            <div class="form-row" style="margin-bottom: 8px;">
-                <label for="aiApiKey" class="form-label-sm">API Key</label>
-                <input type="password" id="aiApiKey" class="select-input" placeholder="sk-..." style="font-family: monospace;">
+            <div class="input-group" style="margin-bottom: 8px;">
+                <label for="aiApiKey">API Key</label>
+                <input type="password" id="aiApiKey" class="text-input" placeholder="sk-..." style="font-family: monospace;">
             </div>
-            <div class="form-row" style="margin-bottom: 8px;">
-                <label for="aiBaseUrl" class="form-label-sm">Base URL</label>
-                <input type="text" id="aiBaseUrl" class="select-input" placeholder="https://api.openai.com/v1" style="font-family: monospace;">
+
+            <div class="input-group">
+                <label for="aiProvider">AI Provider</label>
+                <select id="aiProvider" class="select-input">
+                    <option value="openai">OpenAI (GPT-4o)</option>
+                    <option value="anthropic">Anthropic (Claude 3.5)</option>
+                    <option value="google">Google (Gemini 1.5)</option>
+                    <option value="openrouter">OpenRouter (All models)</option>
+                    <option value="custom">Custom (OpenAI Compatible)</option>
+                </select>
             </div>
-            <div class="form-row">
-                <label for="aiModel" class="form-label-sm">Model</label>
+
+            <div class="input-group" id="customUrlGroup" style="display: none;">
+                <label for="aiBaseUrl">Base URL</label>
+                <input type="text" id="aiBaseUrl" class="text-input" placeholder="https://api.openai.com/v1">
+            </div>
+
+            <div class="input-group">
+                <label for="aiModel">AI Model</label>
                 <select id="aiModel" class="select-input">
-                    <optgroup label="OpenAI (Direct)">
+                    <optgroup label="OpenAI (Direct)" id="opt-openai">
                         <option value="gpt-4o-mini">gpt-4o-mini (Fast & Cheap)</option>
                         <option value="gpt-4o">gpt-4o (Most Intelligent)</option>
                     </optgroup>
-                    <optgroup label="Anthropic (OpenRouter)">
+                    <optgroup label="Anthropic (Direct)" id="opt-anthropic" style="display: none;">
+                        <option value="claude-3-5-sonnet-20240620">Claude 3.5 Sonnet</option>
+                        <option value="claude-3-haiku-20240307">Claude 3 Haiku</option>
+                    </optgroup>
+                    <optgroup label="Google (Direct)" id="opt-google" style="display: none;">
+                        <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                        <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                    </optgroup>
+                    <optgroup label="OpenRouter" id="opt-openrouter" style="display: none;">
                         <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
-                        <option value="anthropic/claude-3-haiku">Claude 3 Haiku</option>
-                    </optgroup>
-                    <optgroup label="Google (OpenRouter)">
                         <option value="google/gemini-flash-1.5">Gemini 1.5 Flash</option>
-                        <option value="google/gemini-pro-1.5">Gemini 1.5 Pro</option>
-                    </optgroup>
-                    <optgroup label="Open Source (OpenRouter)">
                         <option value="meta-llama/llama-3.1-70b-instruct">Llama 3.1 70B</option>
-                        <option value="meta-llama/llama-3.1-8b-instruct">Llama 3.1 8B</option>
-                        <option value="mistralai/mistral-large">Mistral Large</option>
                     </optgroup>
                 </select>
             </div>

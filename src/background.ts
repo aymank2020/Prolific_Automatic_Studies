@@ -564,42 +564,72 @@ async function queryAI(userPrompt: string, systemPrompt: string): Promise<string
     const apiKey = await getValueFromStorage('aiApiKey', '');
     const baseUrl = await getValueFromStorage('aiBaseUrl', 'https://api.openai.com/v1');
     const model = await getValueFromStorage('aiModel', 'gpt-4o-mini');
+    const provider = await getValueFromStorage('aiProvider', 'openai');
 
     if (!apiKey) return 'NO_API_KEY';
 
-    const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
-
-    // 15-second timeout for AI requests
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
+        let url = '';
+        let headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        let body: any = {};
+
+        if (provider === 'openai' || provider === 'openrouter' || provider === 'custom') {
+            url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+            headers['Authorization'] = `Bearer ${apiKey}`;
+            body = {
                 model: model,
                 messages: [
                     { role: "system", content: systemPrompt },
                     { role: "user", content: userPrompt }
                 ],
                 temperature: 0.1
-            }),
+            };
+        } else if (provider === 'anthropic') {
+            url = 'https://api.anthropic.com/v1/messages';
+            headers['x-api-key'] = apiKey;
+            headers['anthropic-version'] = '2023-06-01';
+            body = {
+                model: model,
+                max_tokens: 1024,
+                system: systemPrompt,
+                messages: [{ role: "user", content: userPrompt }]
+            };
+        } else if (provider === 'google') {
+            url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            body = {
+                contents: [{
+                    parts: [{ text: `${systemPrompt}\n\nQUESTION:\n${userPrompt}` }]
+                }]
+            };
+        }
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(body),
             signal: controller.signal
         });
 
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(`AI API Error: ${errorData.error?.message || response.statusText}`);
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`AI API Error (${provider}): ${errorData.error?.message || response.statusText}`);
         }
 
         const data = await response.json();
-        return data.choices[0].message.content.trim();
+        
+        // Extract content based on provider
+        if (provider === 'anthropic') {
+            return data.content[0].text.trim();
+        } else if (provider === 'google') {
+            return data.candidates[0].content.parts[0].text.trim();
+        } else {
+            return data.choices[0].message.content.trim();
+        }
     } catch (error) {
         clearTimeout(timeoutId);
         throw error;

@@ -150,11 +150,13 @@ async function setupAISettings(): Promise<void> {
     const aiApiKey = document.getElementById("aiApiKey") as HTMLInputElement;
     const aiBaseUrl = document.getElementById("aiBaseUrl") as HTMLInputElement;
     const aiModel = document.getElementById("aiModel") as HTMLSelectElement;
+    const aiProvider = document.getElementById("aiProvider") as HTMLSelectElement;
+    const customUrlGroup = document.getElementById("customUrlGroup") as HTMLElement;
 
-    if (!aiEnabled || !aiShadowMode || !aiSettingsGroup || !aiApiKey || !aiBaseUrl || !aiModel) return;
+    if (!aiEnabled || !aiShadowMode || !aiSettingsGroup || !aiApiKey || !aiBaseUrl || !aiModel || !aiProvider || !customUrlGroup) return;
 
     // Load saved settings
-    const result = await chrome.storage.sync.get(["aiEnabled", "aiShadowMode", "aiApiKey", "aiBaseUrl", "aiModel"]);
+    const result = await chrome.storage.sync.get(["aiEnabled", "aiShadowMode", "aiApiKey", "aiBaseUrl", "aiModel", "aiProvider"]);
     
     aiEnabled.checked = result["aiEnabled"] === true;
     aiShadowMode.checked = result["aiShadowMode"] === true;
@@ -162,7 +164,37 @@ async function setupAISettings(): Promise<void> {
     
     if (result["aiApiKey"]) aiApiKey.value = result["aiApiKey"];
     aiBaseUrl.value = result["aiBaseUrl"] || "https://api.openai.com/v1";
+    if (result["aiProvider"]) aiProvider.value = result["aiProvider"];
     if (result["aiModel"]) aiModel.value = result["aiModel"];
+
+    // Update UI based on provider
+    const updateProviderUI = () => {
+        const provider = aiProvider.value;
+        customUrlGroup.style.display = provider === "custom" ? "block" : "none";
+        
+        // Show/hide optgroups
+        const groups = aiModel.querySelectorAll('optgroup');
+        groups.forEach(g => {
+            const id = g.id;
+            if (id === `opt-${provider}` || provider === "custom") {
+                (g as HTMLElement).style.display = "";
+            } else {
+                (g as HTMLElement).style.display = "none";
+            }
+        });
+        
+        // Auto-select first visible option if current is hidden
+        const selected = aiModel.selectedOptions[0];
+        if (selected && selected.parentElement && (selected.parentElement as HTMLElement).style.display === "none") {
+            const firstVisible = aiModel.querySelector('optgroup:not([style*="display: none"]) option') as HTMLOptionElement;
+            if (firstVisible) {
+                aiModel.value = firstVisible.value;
+                chrome.storage.sync.set({ ["aiModel"]: aiModel.value });
+            }
+        }
+    };
+
+    updateProviderUI();
 
     // Event listeners
     aiEnabled.addEventListener("change", async () => {
@@ -176,6 +208,11 @@ async function setupAISettings(): Promise<void> {
 
     aiApiKey.addEventListener("input", async () => {
         await chrome.storage.sync.set({ ["aiApiKey"]: aiApiKey.value });
+    });
+
+    aiProvider.addEventListener("change", async () => {
+        await chrome.storage.sync.set({ ["aiProvider"]: aiProvider.value });
+        updateProviderUI();
     });
 
     aiBaseUrl.addEventListener("input", async () => {
