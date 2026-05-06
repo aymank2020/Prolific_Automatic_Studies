@@ -79,15 +79,16 @@ function getQuestionId(): string {
 }
 
 function extractQuestionAndOptions(): { question: string, options: string[], type: 'choice' | 'text' } | null {
-    const questionEl = document.querySelector('fieldset > legend, .QuestionText, .question-text, .q-text, h1, h2');
+    // Expanded question selectors for better detection
+    const questionEl = document.querySelector('fieldset > legend, .QuestionText, .question-text, .q-text, h1, h2, .QuestionBody, [id*="QuestionText"]');
     if (!questionEl) return null;
 
     const question = questionEl.textContent?.trim() || '';
-    if (!question || question.length < 5) return null;
+    if (!question || question.length < 3) return null;
 
     // Check for choice inputs (radio/checkbox)
     const options: string[] = [];
-    const choiceInputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+    const choiceInputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"], .Selection, .ChoiceStructure');
     
     choiceInputs.forEach(input => {
         const label = input.closest('label') || input.parentElement;
@@ -206,16 +207,22 @@ async function injectAnswer(aiAnswer: string, type: 'choice' | 'text'): Promise<
 
 function findChoiceElement(aiAnswer: string): HTMLElement | null {
     const answerLower = aiAnswer.toLowerCase().trim();
+    
+    // 1. Try standard inputs
     const inputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');
     for (const input of Array.from(inputs)) {
         const label = input.closest('label') || input.parentElement;
         const text = label?.textContent?.trim().toLowerCase() || '';
         if (text === answerLower || text.includes(answerLower)) return input as HTMLElement;
     }
-    const buttons = document.querySelectorAll('button, label, .choice-label');
-    for (const btn of Array.from(buttons)) {
-        const text = btn.textContent?.trim().toLowerCase() || '';
-        if (text === answerLower || text.includes(answerLower)) return btn as HTMLElement;
+
+    // 2. Try labels and spans (Qualtrics specific)
+    const candidates = document.querySelectorAll('label, span, .choice-label, .Selection, .ChoiceStructure, button');
+    for (const cand of Array.from(candidates)) {
+        const text = cand.textContent?.trim().toLowerCase() || '';
+        if (text === answerLower || (text.length > 0 && answerLower.includes(text))) {
+            return cand as HTMLElement;
+        }
     }
     return null;
 }
@@ -233,9 +240,20 @@ async function simulateTyping(el: HTMLTextAreaElement | HTMLInputElement, text: 
 }
 
 function clickNextButton() {
-    const nextButton = document.querySelector('#NextButton, input[type="submit"], button[name="Next"], button.NextButton, .next-button');
-    if (nextButton && (nextButton as HTMLElement).offsetParent !== null) {
-        (nextButton as HTMLElement).click();
+    const nextSelectors = [
+        '#NextButton', '#Next', 'input[type="submit"]', 
+        'button[name="Next"]', 'button.NextButton', '.next-button',
+        '.NextButton', '[id*="NextButton"]', '[class*="Next"]',
+        'button.q-continue', '.q-next'
+    ];
+    
+    for (const sel of nextSelectors) {
+        const btn = document.querySelector(sel);
+        if (btn && (btn as HTMLElement).offsetParent !== null) {
+            log('🎯 Found Next button:', sel);
+            (btn as HTMLElement).click();
+            break;
+        }
     }
     setTimeout(() => { isSolving = false; }, 2000);
 }

@@ -68,15 +68,16 @@ function getQuestionId() {
     return window.location.href + '#' + (document.querySelector('.QuestionText, .question-text, legend')?.textContent?.substring(0, 50) || Date.now());
 }
 function extractQuestionAndOptions() {
-    const questionEl = document.querySelector('fieldset > legend, .QuestionText, .question-text, .q-text, h1, h2');
+    // Expanded question selectors for better detection
+    const questionEl = document.querySelector('fieldset > legend, .QuestionText, .question-text, .q-text, h1, h2, .QuestionBody, [id*="QuestionText"]');
     if (!questionEl)
         return null;
     const question = questionEl.textContent?.trim() || '';
-    if (!question || question.length < 5)
+    if (!question || question.length < 3)
         return null;
     // Check for choice inputs (radio/checkbox)
     const options = [];
-    const choiceInputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+    const choiceInputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"], .Selection, .ChoiceStructure');
     choiceInputs.forEach(input => {
         const label = input.closest('label') || input.parentElement;
         const text = label?.textContent?.trim();
@@ -185,6 +186,7 @@ async function injectAnswer(aiAnswer, type) {
 }
 function findChoiceElement(aiAnswer) {
     const answerLower = aiAnswer.toLowerCase().trim();
+    // 1. Try standard inputs
     const inputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');
     for (const input of Array.from(inputs)) {
         const label = input.closest('label') || input.parentElement;
@@ -192,11 +194,13 @@ function findChoiceElement(aiAnswer) {
         if (text === answerLower || text.includes(answerLower))
             return input;
     }
-    const buttons = document.querySelectorAll('button, label, .choice-label');
-    for (const btn of Array.from(buttons)) {
-        const text = btn.textContent?.trim().toLowerCase() || '';
-        if (text === answerLower || text.includes(answerLower))
-            return btn;
+    // 2. Try labels and spans (Qualtrics specific)
+    const candidates = document.querySelectorAll('label, span, .choice-label, .Selection, .ChoiceStructure, button');
+    for (const cand of Array.from(candidates)) {
+        const text = cand.textContent?.trim().toLowerCase() || '';
+        if (text === answerLower || (text.length > 0 && answerLower.includes(text))) {
+            return cand;
+        }
     }
     return null;
 }
@@ -212,9 +216,19 @@ async function simulateTyping(el, text) {
     el.blur();
 }
 function clickNextButton() {
-    const nextButton = document.querySelector('#NextButton, input[type="submit"], button[name="Next"], button.NextButton, .next-button');
-    if (nextButton && nextButton.offsetParent !== null) {
-        nextButton.click();
+    const nextSelectors = [
+        '#NextButton', '#Next', 'input[type="submit"]',
+        'button[name="Next"]', 'button.NextButton', '.next-button',
+        '.NextButton', '[id*="NextButton"]', '[class*="Next"]',
+        'button.q-continue', '.q-next'
+    ];
+    for (const sel of nextSelectors) {
+        const btn = document.querySelector(sel);
+        if (btn && btn.offsetParent !== null) {
+            log('🎯 Found Next button:', sel);
+            btn.click();
+            break;
+        }
     }
     setTimeout(() => { isSolving = false; }, 2000);
 }
