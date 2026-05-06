@@ -272,6 +272,12 @@ async function loadHistory() {
                         <span>Pay: <strong>${payStr}</strong>${payHourStr}</span>
                         <span>Time: ${item.duration ? item.duration + ' mins' : 'N/A'}</span>
                     </div>
+                    ${item.completionCode ? `
+                        <div style="background: #f0fdf4; border: 1px dashed #22c55e; padding: 4px 8px; border-radius: 4px; margin: 6px 0; font-size: 11px; color: #15803d; display: flex; justify-content: space-between; align-items: center;">
+                            <span>Code: <strong>${item.completionCode}</strong></span>
+                            <span style="font-size: 9px; cursor: pointer; text-decoration: underline;" onclick="navigator.clipboard.writeText('${item.completionCode}')">Copy</span>
+                        </div>
+                    ` : ''}
                     <div style="display: flex; justify-content: space-between; font-size: 10px; color: #6b7280; border-top: 1px solid #eee; padding-top: 4px; margin-top: 4px;">
                         <span>${timeStr}</span>
                         <span>Source: ${item.source}</span>

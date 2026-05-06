@@ -224,6 +224,7 @@ async function handleMessages(message: { target: string; type: any; data?: any; 
             break;
 
         // Rate Limit Detection
+        // Rate Limit Detection
         case 'rate-limit-detected':
             console.warn('[Background] RATE LIMIT DETECTED! Pausing automation...');
             await chrome.storage.sync.set({[AUTO_RESERVE]: false});
@@ -250,6 +251,16 @@ async function handleMessages(message: { target: string; type: any; data?: any; 
                 sendResponse(null);
             }
             break;
+
+        case 'completion-code-detected':
+            console.log('[Background] Completion Code Detected:', message.data);
+            updateHistoryWithCode(message.data.code, message.data.url);
+            break;
+
+        case 'completion-code-manual':
+            console.log('[Background] Manual Code Entry:', message.data);
+            addToHistory({ id: message.data.studyId, code: message.data.code, status: 'reserved' });
+            break;
     }
 }
 
@@ -275,7 +286,8 @@ async function addToHistory(data: any) {
             places: studyInfo.total_available_places || 0,
             source: data.source || 'auto',
             url: data.url || url,
-            status: data.status || 'detected'
+            status: data.status || 'detected',
+            completionCode: data.code || null
         });
         
         // Keep only last 100 studies for a richer history
@@ -283,6 +295,35 @@ async function addToHistory(data: any) {
         await chrome.storage.local.set({ studyHistory: history });
     } catch (e) {
         console.error('[Background] Error adding to history:', e);
+    }
+}
+
+async function updateHistoryWithCode(code: string, url: string) {
+    try {
+        const history: any[] = await getValueFromStorage<any[]>('studyHistory', []);
+        let updated = false;
+        
+        for (let entry of history) {
+            const isRecent = (Date.now() - entry.timestamp) < 2 * 60 * 60 * 1000;
+            if (isRecent && !entry.completionCode) {
+                entry.completionCode = code;
+                updated = true;
+                break;
+            }
+        }
+        
+        if (updated) {
+            await chrome.storage.local.set({ studyHistory: history });
+            chrome.notifications.create({
+                type: 'basic',
+                iconUrl: chrome.runtime.getURL(ICON_URL),
+                title: '🎯 Completion Code Captured',
+                message: `Code: ${code} has been saved to your history.`,
+                priority: 1
+            });
+        }
+    } catch (e) {
+        console.error('[Background] Error updating code:', e);
     }
 }
 

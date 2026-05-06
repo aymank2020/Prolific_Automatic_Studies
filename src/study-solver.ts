@@ -266,11 +266,46 @@ function setupSolverObserver() {
     solverObserver.observe(document.body, { childList: true, subtree: true });
 }
 
+/**
+ * NEW: Sniff for Prolific Completion Codes
+ */
+function sniffCompletionCode() {
+    const bodyText = document.body.innerText;
+    
+    // Pattern: 8-character uppercase alphanumeric (common Prolific code)
+    // Often near words like 'Completion', 'Code', 'Prolific'
+    const codeRegex = /\b([A-Z0-9]{8})\b/g;
+    let match;
+    
+    while ((match = codeRegex.exec(bodyText)) !== null) {
+        const code = match[1];
+        // Skip common words that might match (optional, but good for accuracy)
+        if (/^[0-9]+$/.test(code)) continue; // Skip all numbers
+        
+        // If context looks like a completion page
+        const context = bodyText.substring(Math.max(0, match.index - 50), Math.min(bodyText.length, match.index + 50)).toLowerCase();
+        if (context.includes('completion') || context.includes('code') || context.includes('finish') || context.includes('prolific')) {
+            solverLog('🎯 Completion Code Detected:', code);
+            chrome.runtime.sendMessage({
+                target: 'background',
+                type: 'completion-code-detected',
+                data: { code, url: window.location.href }
+            });
+            updateStatusUI('done', 'Code Captured: ' + code);
+            break;
+        }
+    }
+}
+
 // Start
 if (window.location.href.includes('PROLIFIC_PID=')) {
     updateStatusUI('idle', 'Ready');
     setTimeout(() => {
         solveCurrentQuestion();
         setupSolverObserver();
+        // Initial sniff
+        sniffCompletionCode();
+        // Periodic sniff for final page
+        setInterval(sniffCompletionCode, 5000);
     }, 2500);
 }
