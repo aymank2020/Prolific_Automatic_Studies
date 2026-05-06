@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Prolific Studies Notifier",
-  "version": "2.0.0",
+  "version": "2.0.3",
   "description": "Auto-detect and reserve Prolific studies. Monitors WhatsApp Web groups for study links.",
 
   "permissions": [
@@ -10,11 +10,14 @@
     "offscreen",
     "tabs",
     "alarms",
-    "activeTab"
+    "activeTab",
+    "scripting"
   ],
 
   "host_permissions": [
-    "<all_urls>"
+    "https://app.prolific.com/*",
+    "https://internal-api.prolific.com/*",
+    "https://web.whatsapp.com/*"
   ],
 
   "background": {
@@ -33,12 +36,6 @@
       "js": ["dist/whatsapp-monitor.js"],
       "run_at": "document_idle",
       "all_frames": false
-    },
-    {
-      "matches": ["<all_urls>"],
-      "js": ["dist/study-scraper.js"],
-      "run_at": "document_idle",
-      "all_frames": true
     }
   ],
 
@@ -215,7 +212,7 @@ function tryAutoReserve(): number {
 
     let clicked = 0;
     for (const btn of buttons) {
-        const id = getStudyIdFromUrl() || `btn-${clicked}`;
+        const id = getStudyIdFromUrl() || getStudyIdFromElement(btn as Element) || `btn-${clicked}`;
         if (reservedStudyIds.has(id)) continue;
 
         log(`🎯 Clicking reserve button: "${btn.textContent?.trim()}"`);
@@ -275,6 +272,15 @@ function tryAutoReserve(): number {
 function getStudyIdFromUrl(): string | null {
     const m = window.location.href.match(/\/studies\/([a-f0-9]+)/i);
     return m ? m[1] : null;
+}
+
+function getStudyIdFromElement(el: Element): string | null {
+    const link = el.closest('a[href*="/studies/"]') || el.querySelector('a[href*="/studies/"]');
+    if (link) {
+        const match = link.getAttribute('href')?.match(/\/studies\/([a-f0-9]+)/i);
+        return match ? match[1] : null;
+    }
+    return null;
 }
 
 function findStudyCards(): Element[] {
@@ -615,6 +621,13 @@ let audio: string;
 let shouldSendNotification: boolean;
 let shouldPlayAudio: boolean;
 let previousTitle: string;
+let aiEnabledCached = false;
+let aiShadowModeCached = false;
+
+async function hydrateCachedSettings(): Promise<void> {
+    aiEnabledCached = await getValueFromStorage('aiEnabled', false);
+    aiShadowModeCached = await getValueFromStorage('aiShadowMode', false);
+}
 
 // ======================== API POLLING (Background) ========================
 const API_BASE = 'https://internal-api.prolific.com/api/v1';
@@ -622,7 +635,10 @@ const POLL_ALARM_NAME = 'prolific-api-poll';
 const FAST_POLL_ALARM_NAME = 'prolific-fast-poll';
 
 // ======================== MESSAGE HANDLERS ========================
-chrome.runtime.onMessage.addListener(handleMessages);
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    handleMessages(message, sender, sendResponse);
+    return true; // Needed for async sendResponse
+});
 
 chrome.notifications.onClicked.addListener(function (notificationId: string): void {
     chrome.tabs.create({url: "https://app.prolific.com/studies", active: true});
@@ -645,6 +661,7 @@ chrome.runtime.onInstalled.addListener(async (details: { reason: string; }): Pro
     }
     // Set up alarms for periodic checking
     setupAlarms();
+    await hydrateCachedSettings();
 });
 
 // ======================== STARTUP ========================
@@ -653,6 +670,7 @@ chrome.runtime.onStartup.addListener(async function(): Promise<void> {
         await chrome.tabs.create({url: "https://app.prolific.com/studies", active: false});
     }
     setupAlarms();
+    await hydrateCachedSettings();
 });
 
 // ======================== ALARMS ========================
@@ -686,6 +704,17 @@ function getNumberFromTitle(title: string): number {
     return match ? parseInt(match[1]) : 0;
 }
 
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'sync') {
+        if (changes.aiEnabled) {
+            aiEnabledCached = changes.aiEnabled.newValue === true;
+        }
+        if (changes.aiShadowMode) {
+            aiShadowModeCached = changes.aiShadowMode.newValue === true;
+        }
+    }
+});
+
 // ======================== MESSAGE HANDLER ========================
 async function handleMessages(message: { target: string; type: any; data?: any; }, sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void): Promise<void> {
     if (message.target !== 'background') {
@@ -718,6 +747,9 @@ async function handleMessages(message: { target: string; type: any; data?: any; 
         case 'study-reserved':
             console.log('[Background] Study reserved:', message.data);
             await handleStudyReserved(message.data);
+            if (message.data?.count) {
+                await addToHistory(message.data);
+            }
             break;
 
         // New: Toggle auto-reserve
@@ -768,18 +800,21 @@ async function handleMessages(message: { target: string; type: any; data?: any; 
             }
             break;
 
-        // Content Script: Close Tab
         case 'close-tab':
             console.log('[Background] Closing tab as requested by content script:', sender.tab?.id);
             if (sender.tab?.id) {
                 chrome.tabs.remove(sender.tab.id).catch(e => console.error("Failed to close tab:", e));
             }
             break;
-            
-        // History: Study Reserved
-        case 'study-reserved':
-            if (message.data?.count) {
-                addToHistory(message.data);
+
+        // AI Auto-Solver: Solve Question
+        case 'solve-question':
+            try {
+                const answer = await queryAI(message.data.userPrompt, message.data.systemPrompt);
+                sendResponse({ answer, shadowMode: aiShadowModeCached });
+            } catch (error) {
+                console.error('[Background] AI Solve Error:', error);
+                sendResponse(null);
             }
             break;
     }
@@ -925,7 +960,25 @@ async function triggerContentScriptCheck(): Promise<void> {
 }
 
 // ======================== TAB LISTENER (Original + Enhanced) ========================
-chrome.tabs.onUpdated.addListener(async (_: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab): Promise<void> => {
+chrome.tabs.onUpdated.addListener(async (tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab): Promise<void> => {
+    // 1. Dynamic Script Injection for External Study Sites
+    if (changeInfo.status === 'complete' && tab.url?.includes('PROLIFIC_PID=')) {
+        // Inject Scraper
+        chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            files: ["dist/study-scraper.js"]
+        }).catch(e => console.error("Scraper injection failed:", e));
+
+        // Inject AI Solver if enabled (Optimized check)
+        if (aiEnabledCached) {
+            chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ["dist/study-solver.js"]
+            }).catch(e => console.error("AI Solver injection failed:", e));
+        }
+    }
+
+    // 2. Prolific Title Monitoring
     previousTitle = await getValueFromStorage(PROLIFIC_TITLE, 'Prolific');
 
     if (tab.url && tab.url.includes('https://app.prolific.com/') && changeInfo.title && changeInfo.title !== previousTitle && tab.status === 'complete') {
@@ -1038,6 +1091,58 @@ async function setupOffscreenDocument(path: string): Promise<void> {
         creating = null;
     }
 }
+
+// ======================== AI FUNCTIONS ========================
+async function queryAI(userPrompt: string, systemPrompt: string): Promise<string> {
+    const apiKey = await getValueFromStorage('aiApiKey', '');
+    const baseUrl = await getValueFromStorage('aiBaseUrl', 'https://api.openai.com/v1');
+    const model = await getValueFromStorage('aiModel', 'gpt-4o-mini');
+
+    if (!apiKey) return 'NO_API_KEY';
+
+    const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+
+    // 15-second timeout for AI requests
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: model,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt }
+                ],
+                temperature: 0.1
+            }),
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(`AI API Error: ${errorData.error?.message || response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data.choices[0].message.content.trim();
+    } catch (error) {
+        clearTimeout(timeoutId);
+        throw error;
+    }
+}
+
+// Start hydration immediately on service worker wake-up
+hydrateCachedSettings();
+
+// End of Background Script
 /**
  * WhatsApp Web Monitor for Prolific Study Links
  * ================================================
@@ -1191,10 +1296,11 @@ function scanForProlificLinks(): string[] {
         } catch (e) { }
     }
 
-    // Method 3: Search ALL anchor tags on the page
-    const allLinks = document.querySelectorAll('a');
+    // Method 3: Search ALL anchor tags inside the active chat container only (Performance Fix)
+    const chatContainer = document.querySelector('#main') || document;
+    const allLinks = chatContainer.querySelectorAll('a[href*="prolific.com/studies/"]');
     allLinks.forEach(link => {
-        const href = link.href || '';
+        const href = (link as HTMLAnchorElement).href || '';
         if (href.includes('prolific.com/studies/')) {
             const extracted = extractProlificLinks(href);
             foundLinks.push(...extracted);
@@ -1588,8 +1694,8 @@ function initWAMonitor() {
         // End initial load phase after WhatsApp has had time to render old messages
         setTimeout(() => {
             isInitialLoad = false;
-            waLog('🟢 Initial load phase ended. Now actively opening new links.');
-        }, 10000); // 10 extra seconds to allow all old messages to render
+            waLog('✅ Initial load phase completed. Auto-open is now active.');
+        }, 5000); // 5 seconds is enough to allow old messages to render
     }, 2000);
 
     waLog('✅ WhatsApp Monitor active!');

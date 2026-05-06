@@ -495,9 +495,12 @@ function addIndicator() {
 function init() {
     log('🚀 Initializing v2...');
     
+    // ALWAYS setup message handling so the popup can get status
+    setupMessages();
+
     // Check if we are on the correct page (ignore side tabs like settings, account)
     if (!isTargetPage()) {
-        log('⏸️ Not on /studies page, bot sleeping to prevent interference.');
+        log('⏸️ Not on /studies page, bot sleeping but listening for messages.');
         setupNavMonitor(); // Only monitor navigation so we can wake up if they go to /studies
         return;
     }
@@ -512,7 +515,6 @@ function init() {
         });
     } catch (e) {}
 
-    setupMessages();
     interceptFetch();
     interceptXHR();
     setupObserver();
