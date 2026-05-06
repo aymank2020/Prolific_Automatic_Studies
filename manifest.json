@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Prolific Studies Notifier",
-  "version": "2.0.3",
-  "description": "Auto-detect and reserve Prolific studies. Monitors WhatsApp Web groups for study links.",
+  "name": "Ayman Prolific Studies Notifier",
+  "version": "2.0.4",
+  "description": "Premium automated notifier and reservation system for Prolific studies.",
 
   "permissions": [
     "storage",
@@ -41,7 +41,7 @@
 
   "action": {
     "default_popup": "popup/popup.html",
-    "title": "Prolific get studies automatically"
+    "title": "Ayman Prolific Notifier"
   },
 
   "icons": {

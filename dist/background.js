@@ -14,7 +14,7 @@ const VOLUME = "volume";
 const COUNTER = "counter";
 const AUTO_RESERVE = "autoReserveEnabled";
 const ICON_URL = 'imgs/logo.png';
-const TITLE = 'Prolific Automatic Studies';
+const TITLE = 'Ayman Prolific Notifier';
 const MESSAGE = 'A new study has been posted on Prolific!';
 const PROLIFIC_TITLE = 'prolificTitle';
 // ======================== STATE ========================
