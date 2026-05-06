@@ -1,14 +1,4 @@
 // Listen for messages from the extension
-chrome.runtime.onMessage.addListener(msg => {
-    if ('play' in msg) playAudio(msg.play);
-});
-
-// Play sound with access to DOM APIs
-function playAudio({ source, volume }) {
-    const audio = new Audio(source);
-    audio.volume = volume;
-    audio.play();
-}
 chrome.runtime.onMessage.addListener(handleMessages);
 
 async function handleMessages(message) {
@@ -27,19 +17,17 @@ async function handleMessages(message) {
 
 async function playSound(data) {
     try {
-        // Error if we received the wrong kind of data.
         if (typeof data !== 'object' || !('audio' in data) || !('volume' in data)) {
-            throw new TypeError(
-                `Value provided must be an 'object' with 'audio' and 'volume' properties, got '${typeof data}'.`
-            );
+            throw new TypeError(`Invalid sound data`);
         }
-        // `document.execCommand('copy')` works against the user's selection in a web
-        // page. As such, we must insert the string we want to copy to the web page
-        // and to select that content in the page before calling `execCommand()`.
-        let audio = new Audio('/audio/' + data.audio);
+        
+        // Use relative path from extension root
+        const source = chrome.runtime.getURL('audio/' + data.audio);
+        const audio = new Audio(source);
         audio.volume = data.volume;
-        audio.play();
+        await audio.play();
+        console.log('[Offscreen] Playing:', data.audio);
     } catch (error) {
-        console.error(error);
+        console.error('[Offscreen] Audio error:', error);
     }
 }

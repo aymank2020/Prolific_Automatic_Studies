@@ -1,5 +1,11 @@
-import Reason = chrome.offscreen.Reason;
-import ContextType = chrome.runtime.ContextType;
+// Global error handling for Service Worker
+self.addEventListener('error', (event) => {
+    console.error('🚀 [Service Worker Error]', (event as ErrorEvent).error);
+});
+
+self.addEventListener('unhandledrejection', (event) => {
+    console.error('🚀 [Service Worker Promise Error]', (event as PromiseRejectionEvent).reason);
+});
 
 // ======================== CONSTANTS ========================
 const AUDIO_ACTIVE = "audioActive";
@@ -23,6 +29,9 @@ let shouldPlayAudio: boolean;
 let previousTitle: string;
 let aiEnabledCached = false;
 let aiShadowModeCached = false;
+
+// Remove the top-level aliases that might cause issues if chrome.offscreen is not ready
+// and use string literals instead.
 
 async function hydrateCachedSettings(): Promise<void> {
     aiEnabledCached = await getValueFromStorage('aiEnabled', false);
@@ -470,25 +479,37 @@ async function setInitialValues(): Promise<void> {
 
 // ======================== OFFSCREEN DOCUMENT ========================
 async function setupOffscreenDocument(path: string): Promise<void> {
-    const offscreenUrl: string = chrome.runtime.getURL(path);
-    const existingContexts = await chrome.runtime.getContexts({
-        contextTypes: [ContextType.OFFSCREEN_DOCUMENT],
-        documentUrls: [offscreenUrl]
-    });
+    try {
+        const offscreenUrl: string = chrome.runtime.getURL(path);
+        
+        // Use string literals for types to avoid alias issues
+        const existingContexts = await chrome.runtime.getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT' as any],
+            documentUrls: [offscreenUrl]
+        });
 
-    if (existingContexts.length > 0) {
-        return;
-    }
-    if (creating) {
-        await creating;
-    } else {
+        if (existingContexts.length > 0) {
+            return;
+        }
+
+        if (creating) {
+            await creating;
+            return;
+        }
+
         creating = chrome.offscreen.createDocument({
             url: path,
-            reasons: [Reason.AUDIO_PLAYBACK],
-            justification: 'Audio playback'
+            reasons: ['AUDIO_PLAYBACK' as any],
+            justification: 'Audio playback for study notifications'
         });
+        
         await creating;
         creating = null;
+        console.log('[Background] Offscreen document created');
+    } catch (error) {
+        console.error('[Background] Failed to create offscreen document:', error);
+        creating = null;
+        // Fallback or handle error
     }
 }
 

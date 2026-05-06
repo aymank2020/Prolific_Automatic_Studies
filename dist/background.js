@@ -8,8 +8,13 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var Reason = chrome.offscreen.Reason;
-var ContextType = chrome.runtime.ContextType;
+// Global error handling for Service Worker
+self.addEventListener('error', (event) => {
+    console.error('🚀 [Service Worker Error]', event.error);
+});
+self.addEventListener('unhandledrejection', (event) => {
+    console.error('🚀 [Service Worker Promise Error]', event.reason);
+});
 // ======================== CONSTANTS ========================
 const AUDIO_ACTIVE = "audioActive";
 const SHOW_NOTIFICATION = "showNotification";
@@ -31,6 +36,8 @@ let shouldPlayAudio;
 let previousTitle;
 let aiEnabledCached = false;
 let aiShadowModeCached = false;
+// Remove the top-level aliases that might cause issues if chrome.offscreen is not ready
+// and use string literals instead.
 function hydrateCachedSettings() {
     return __awaiter(this, void 0, void 0, function* () {
         aiEnabledCached = yield getValueFromStorage('aiEnabled', false);
@@ -462,25 +469,33 @@ function setInitialValues() {
 // ======================== OFFSCREEN DOCUMENT ========================
 function setupOffscreenDocument(path) {
     return __awaiter(this, void 0, void 0, function* () {
-        const offscreenUrl = chrome.runtime.getURL(path);
-        const existingContexts = yield chrome.runtime.getContexts({
-            contextTypes: [ContextType.OFFSCREEN_DOCUMENT],
-            documentUrls: [offscreenUrl]
-        });
-        if (existingContexts.length > 0) {
-            return;
-        }
-        if (creating) {
-            yield creating;
-        }
-        else {
+        try {
+            const offscreenUrl = chrome.runtime.getURL(path);
+            // Use string literals for types to avoid alias issues
+            const existingContexts = yield chrome.runtime.getContexts({
+                contextTypes: ['OFFSCREEN_DOCUMENT'],
+                documentUrls: [offscreenUrl]
+            });
+            if (existingContexts.length > 0) {
+                return;
+            }
+            if (creating) {
+                yield creating;
+                return;
+            }
             creating = chrome.offscreen.createDocument({
                 url: path,
-                reasons: [Reason.AUDIO_PLAYBACK],
-                justification: 'Audio playback'
+                reasons: ['AUDIO_PLAYBACK'],
+                justification: 'Audio playback for study notifications'
             });
             yield creating;
             creating = null;
+            console.log('[Background] Offscreen document created');
+        }
+        catch (error) {
+            console.error('[Background] Failed to create offscreen document:', error);
+            creating = null;
+            // Fallback or handle error
         }
     });
 }
