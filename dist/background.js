@@ -1,13 +1,3 @@
-"use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 // Global error handling for Service Worker
 self.addEventListener('error', (event) => {
     console.error('🚀 [Service Worker Error]', event.error);
@@ -38,11 +28,9 @@ let aiEnabledCached = false;
 let aiShadowModeCached = false;
 // Remove the top-level aliases that might cause issues if chrome.offscreen is not ready
 // and use string literals instead.
-function hydrateCachedSettings() {
-    return __awaiter(this, void 0, void 0, function* () {
-        aiEnabledCached = yield getValueFromStorage('aiEnabled', false);
-        aiShadowModeCached = yield getValueFromStorage('aiShadowMode', false);
-    });
+async function hydrateCachedSettings() {
+    aiEnabledCached = await getValueFromStorage('aiEnabled', false);
+    aiShadowModeCached = await getValueFromStorage('aiShadowMode', false);
 }
 // ======================== API POLLING (Background) ========================
 const API_BASE = 'https://internal-api.prolific.com/api/v1';
@@ -64,25 +52,23 @@ chrome.notifications.onButtonClicked.addListener(function (notificationId, butto
     chrome.notifications.clear(notificationId);
 });
 // ======================== INSTALLATION ========================
-chrome.runtime.onInstalled.addListener((details) => __awaiter(void 0, void 0, void 0, function* () {
+chrome.runtime.onInstalled.addListener(async (details) => {
     if (details.reason === "install") {
-        yield setInitialValues();
-        yield new Promise(resolve => setTimeout(resolve, 1000));
-        yield chrome.tabs.create({ url: "https://github.com/aymank2020/Prolific_Automatic_Studies", active: true });
+        await setInitialValues();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        await chrome.tabs.create({ url: "https://github.com/aymank2020/Prolific_Automatic_Studies", active: true });
     }
     // Set up alarms for periodic checking
     setupAlarms();
-    yield hydrateCachedSettings();
-}));
+    await hydrateCachedSettings();
+});
 // ======================== STARTUP ========================
-chrome.runtime.onStartup.addListener(function () {
-    return __awaiter(this, void 0, void 0, function* () {
-        if (yield getValueFromStorage(OPEN_PROLIFIC, false)) {
-            yield chrome.tabs.create({ url: "https://app.prolific.com/studies", active: false });
-        }
-        setupAlarms();
-        yield hydrateCachedSettings();
-    });
+chrome.runtime.onStartup.addListener(async function () {
+    if (await getValueFromStorage(OPEN_PROLIFIC, false)) {
+        await chrome.tabs.create({ url: "https://app.prolific.com/studies", active: false });
+    }
+    setupAlarms();
+    await hydrateCachedSettings();
 });
 // ======================== ALARMS ========================
 function setupAlarms() {
@@ -91,14 +77,14 @@ function setupAlarms() {
         periodInMinutes: 0.5, // 30 seconds
     });
 }
-chrome.alarms.onAlarm.addListener((alarm) => __awaiter(void 0, void 0, void 0, function* () {
+chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === POLL_ALARM_NAME) {
-        yield checkProlificTab();
+        await checkProlificTab();
     }
     if (alarm.name === FAST_POLL_ALARM_NAME) {
-        yield triggerContentScriptCheck();
+        await triggerContentScriptCheck();
     }
-}));
+});
 // ======================== UTILITY FUNCTIONS ========================
 function getValueFromStorage(key, defaultValue) {
     return new Promise((resolve) => {
@@ -122,250 +108,229 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     }
 });
 // ======================== MESSAGE HANDLER ========================
-function handleMessages(message, sender, sendResponse) {
-    return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h;
-        if (message.target !== 'background') {
-            return;
-        }
-        switch (message.type) {
-            case 'play-sound':
-                audio = yield getValueFromStorage(AUDIO, 'alert1.mp3');
-                volume = (yield getValueFromStorage(VOLUME, 100)) / 100;
-                yield playAudio(audio, volume);
-                sendNotification();
-                break;
-            case 'show-notification':
-                sendNotification();
-                break;
-            case 'clear-badge':
-                yield chrome.action.setBadgeText({ text: '' });
-                break;
-            // New: Study detected by content script
-            case 'studies-detected':
-                console.log('[Background] Studies detected:', message.data);
-                yield handleStudiesDetected(message.data);
-                break;
-            // New: Study reserved by content script
-            case 'study-reserved':
-                console.log('[Background] Study reserved:', message.data);
-                yield handleStudyReserved(message.data);
-                if ((_a = message.data) === null || _a === void 0 ? void 0 : _a.count) {
-                    yield addToHistory(message.data);
-                }
-                break;
-            // New: Toggle auto-reserve
-            case 'toggle-auto-reserve':
-                const enabled = (_c = (_b = message.data) === null || _b === void 0 ? void 0 : _b.enabled) !== null && _c !== void 0 ? _c : true;
-                yield chrome.storage.sync.set({ [AUTO_RESERVE]: enabled });
-                // Forward to content script
-                yield broadcastToContentScripts({
-                    target: 'content-script',
-                    type: 'toggle-auto-reserve',
-                    data: { enabled },
-                });
-                break;
-            // New: Force check from popup
-            case 'force-check':
-                yield triggerContentScriptCheck();
-                break;
-            // New: Get status from content scripts
-            case 'get-status':
-                // This will be handled via sendResponse in the listener
-                break;
-            // WhatsApp: Open study link from WhatsApp monitor
-            case 'open-study-link':
-                console.log('[Background] Opening study from WhatsApp:', (_d = message.data) === null || _d === void 0 ? void 0 : _d.url);
-                if ((_e = message.data) === null || _e === void 0 ? void 0 : _e.url) {
-                    yield chrome.tabs.create({ url: message.data.url, active: true });
-                    // Play sound alert
-                    shouldPlayAudio = yield getValueFromStorage(AUDIO_ACTIVE, true);
-                    if (shouldPlayAudio) {
-                        audio = yield getValueFromStorage(AUDIO, 'alert1.mp3');
-                        volume = (yield getValueFromStorage(VOLUME, 100)) / 100;
-                        yield playAudio(audio, volume);
-                    }
-                    // Send notification
-                    sendNotification(`📱 Study from WhatsApp! Opening: ${message.data.studyId || 'unknown'}`);
-                }
-                break;
-            // WhatsApp: Study found notification
-            case 'whatsapp-study-found':
-                console.log('[Background] WhatsApp study found:', message.data);
-                shouldSendNotification = yield getValueFromStorage(SHOW_NOTIFICATION, true);
-                if (shouldSendNotification) {
-                    sendNotification(`📱 New study link from WhatsApp! ID: ${((_f = message.data) === null || _f === void 0 ? void 0 : _f.studyId) || 'unknown'}`);
-                }
-                break;
-            case 'close-tab':
-                console.log('[Background] Closing tab as requested by content script:', (_g = sender.tab) === null || _g === void 0 ? void 0 : _g.id);
-                if ((_h = sender.tab) === null || _h === void 0 ? void 0 : _h.id) {
-                    chrome.tabs.remove(sender.tab.id).catch(e => console.error("Failed to close tab:", e));
-                }
-                break;
-            // AI Auto-Solver: Solve Question
-            case 'solve-question':
-                try {
-                    const answer = yield queryAI(message.data.userPrompt, message.data.systemPrompt);
-                    sendResponse({ answer, shadowMode: aiShadowModeCached });
-                }
-                catch (error) {
-                    console.error('[Background] AI Solve Error:', error);
-                    sendResponse(null);
-                }
-                break;
-        }
-    });
-}
-function addToHistory(data) {
-    return __awaiter(this, void 0, void 0, function* () {
-        var _a;
-        try {
-            const history = yield getValueFromStorage('studyHistory', []);
-            let studyInfo = data.study || {};
-            history.unshift({
-                timestamp: Date.now(),
-                count: data.count || 1,
-                id: data.id || studyInfo.id || 'unknown',
-                title: studyInfo.name || 'Unknown Study',
-                researcher: ((_a = studyInfo.researcher) === null || _a === void 0 ? void 0 : _a.name) || 'Unknown Researcher',
-                pay: studyInfo.reward || 0,
-                payPerHour: studyInfo.estimated_reward_per_hour || 0,
-                duration: studyInfo.estimated_completion_time || 0,
-                places: studyInfo.total_available_places || 0,
-                source: data.source || 'auto'
+async function handleMessages(message, sender, sendResponse) {
+    if (message.target !== 'background') {
+        return;
+    }
+    switch (message.type) {
+        case 'play-sound':
+            audio = await getValueFromStorage(AUDIO, 'alert1.mp3');
+            volume = await getValueFromStorage(VOLUME, 100) / 100;
+            await playAudio(audio, volume);
+            sendNotification();
+            break;
+        case 'show-notification':
+            sendNotification();
+            break;
+        case 'clear-badge':
+            await chrome.action.setBadgeText({ text: '' });
+            break;
+        // New: Study detected by content script
+        case 'studies-detected':
+            console.log('[Background] Studies detected:', message.data);
+            await handleStudiesDetected(message.data);
+            break;
+        // New: Study reserved by content script
+        case 'study-reserved':
+            console.log('[Background] Study reserved:', message.data);
+            await handleStudyReserved(message.data);
+            if (message.data?.count) {
+                await addToHistory(message.data);
+            }
+            break;
+        // New: Toggle auto-reserve
+        case 'toggle-auto-reserve':
+            const enabled = message.data?.enabled ?? true;
+            await chrome.storage.sync.set({ [AUTO_RESERVE]: enabled });
+            // Forward to content script
+            await broadcastToContentScripts({
+                target: 'content-script',
+                type: 'toggle-auto-reserve',
+                data: { enabled },
             });
-            // Keep only last 50 studies for a richer history
-            if (history.length > 50)
-                history.length = 50;
-            yield chrome.storage.local.set({ studyHistory: history });
-        }
-        catch (e) { }
-    });
+            break;
+        // New: Force check from popup
+        case 'force-check':
+            await triggerContentScriptCheck();
+            break;
+        // New: Get status from content scripts
+        case 'get-status':
+            // This will be handled via sendResponse in the listener
+            break;
+        // WhatsApp: Open study link from WhatsApp monitor
+        case 'open-study-link':
+            console.log('[Background] Opening study from WhatsApp:', message.data?.url);
+            if (message.data?.url) {
+                await chrome.tabs.create({ url: message.data.url, active: true });
+                // Play sound alert
+                shouldPlayAudio = await getValueFromStorage(AUDIO_ACTIVE, true);
+                if (shouldPlayAudio) {
+                    audio = await getValueFromStorage(AUDIO, 'alert1.mp3');
+                    volume = await getValueFromStorage(VOLUME, 100) / 100;
+                    await playAudio(audio, volume);
+                }
+                // Send notification
+                sendNotification(`📱 Study from WhatsApp! Opening: ${message.data.studyId || 'unknown'}`);
+            }
+            break;
+        // WhatsApp: Study found notification
+        case 'whatsapp-study-found':
+            console.log('[Background] WhatsApp study found:', message.data);
+            shouldSendNotification = await getValueFromStorage(SHOW_NOTIFICATION, true);
+            if (shouldSendNotification) {
+                sendNotification(`📱 New study link from WhatsApp! ID: ${message.data?.studyId || 'unknown'}`);
+            }
+            break;
+        case 'close-tab':
+            console.log('[Background] Closing tab as requested by content script:', sender.tab?.id);
+            if (sender.tab?.id) {
+                chrome.tabs.remove(sender.tab.id).catch(e => console.error("Failed to close tab:", e));
+            }
+            break;
+        // AI Auto-Solver: Solve Question
+        case 'solve-question':
+            try {
+                const answer = await queryAI(message.data.userPrompt, message.data.systemPrompt);
+                sendResponse({ answer, shadowMode: aiShadowModeCached });
+            }
+            catch (error) {
+                console.error('[Background] AI Solve Error:', error);
+                sendResponse(null);
+            }
+            break;
+    }
+}
+async function addToHistory(data) {
+    try {
+        const history = await getValueFromStorage('studyHistory', []);
+        let studyInfo = data.study || {};
+        history.unshift({
+            timestamp: Date.now(),
+            count: data.count || 1,
+            id: data.id || studyInfo.id || 'unknown',
+            title: studyInfo.name || 'Unknown Study',
+            researcher: studyInfo.researcher?.name || 'Unknown Researcher',
+            pay: studyInfo.reward || 0,
+            payPerHour: studyInfo.estimated_reward_per_hour || 0,
+            duration: studyInfo.estimated_completion_time || 0,
+            places: studyInfo.total_available_places || 0,
+            source: data.source || 'auto'
+        });
+        // Keep only last 50 studies for a richer history
+        if (history.length > 50)
+            history.length = 50;
+        await chrome.storage.local.set({ studyHistory: history });
+    }
+    catch (e) { }
 }
 // ======================== STUDY HANDLERS ========================
-function handleStudiesDetected(data) {
-    return __awaiter(this, void 0, void 0, function* () {
-        shouldSendNotification = yield getValueFromStorage(SHOW_NOTIFICATION, true);
-        if (shouldSendNotification) {
-            sendNotification((data === null || data === void 0 ? void 0 : data.count) ? `${data.count} studies available!` : undefined);
-        }
-        shouldPlayAudio = yield getValueFromStorage(AUDIO_ACTIVE, true);
-        if (shouldPlayAudio) {
-            audio = yield getValueFromStorage(AUDIO, 'alert1.mp3');
-            volume = (yield getValueFromStorage(VOLUME, 100)) / 100;
-            yield playAudio(audio, volume);
-        }
-        // Update badge
-        if (data === null || data === void 0 ? void 0 : data.count) {
-            yield updateBadge(data.count);
-        }
-        // Bring Prolific tab to front
-        yield focusProlificTab();
-    });
+async function handleStudiesDetected(data) {
+    shouldSendNotification = await getValueFromStorage(SHOW_NOTIFICATION, true);
+    if (shouldSendNotification) {
+        sendNotification(data?.count ? `${data.count} studies available!` : undefined);
+    }
+    shouldPlayAudio = await getValueFromStorage(AUDIO_ACTIVE, true);
+    if (shouldPlayAudio) {
+        audio = await getValueFromStorage(AUDIO, 'alert1.mp3');
+        volume = await getValueFromStorage(VOLUME, 100) / 100;
+        await playAudio(audio, volume);
+    }
+    // Update badge
+    if (data?.count) {
+        await updateBadge(data.count);
+    }
+    // Bring Prolific tab to front
+    await focusProlificTab();
 }
-function handleStudyReserved(data) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const count = (data === null || data === void 0 ? void 0 : data.count) || 1;
-        yield updateCounterAndBadge(count);
-        // Send success notification
-        chrome.notifications.create({
-            type: 'basic',
-            iconUrl: chrome.runtime.getURL(ICON_URL),
-            title: '🎉 Study Reserved!',
-            message: `Successfully reserved ${count} study/studies!`,
-            buttons: [{ title: 'Open Prolific' }, { title: 'Dismiss' }],
-        });
-        // Play success sound
-        shouldPlayAudio = yield getValueFromStorage(AUDIO_ACTIVE, true);
-        if (shouldPlayAudio) {
-            audio = yield getValueFromStorage(AUDIO, 'alert1.mp3');
-            volume = (yield getValueFromStorage(VOLUME, 100)) / 100;
-            yield playAudio(audio, volume);
-        }
+async function handleStudyReserved(data) {
+    const count = data?.count || 1;
+    await updateCounterAndBadge(count);
+    // Send success notification
+    chrome.notifications.create({
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL(ICON_URL),
+        title: '🎉 Study Reserved!',
+        message: `Successfully reserved ${count} study/studies!`,
+        buttons: [{ title: 'Open Prolific' }, { title: 'Dismiss' }],
     });
+    // Play success sound
+    shouldPlayAudio = await getValueFromStorage(AUDIO_ACTIVE, true);
+    if (shouldPlayAudio) {
+        audio = await getValueFromStorage(AUDIO, 'alert1.mp3');
+        volume = await getValueFromStorage(VOLUME, 100) / 100;
+        await playAudio(audio, volume);
+    }
 }
 // ======================== PROLIFIC TAB MANAGEMENT ========================
 /**
  * Find the active Prolific tab
  */
-function findProlificTab() {
-    return __awaiter(this, void 0, void 0, function* () {
-        const tabs = yield chrome.tabs.query({ url: "https://app.prolific.com/*" });
-        return tabs.length > 0 ? tabs[0] : null;
-    });
+async function findProlificTab() {
+    const tabs = await chrome.tabs.query({ url: "https://app.prolific.com/*" });
+    return tabs.length > 0 ? tabs[0] : null;
 }
 /**
  * Focus the Prolific tab
  */
-function focusProlificTab() {
-    return __awaiter(this, void 0, void 0, function* () {
-        const tab = yield findProlificTab();
-        if (tab && tab.id) {
-            try {
-                yield chrome.tabs.update(tab.id, { active: true });
-                if (tab.windowId) {
-                    yield chrome.windows.update(tab.windowId, { focused: true });
-                }
-            }
-            catch (e) {
-                console.log('[Background] Could not focus tab:', e);
+async function focusProlificTab() {
+    const tab = await findProlificTab();
+    if (tab && tab.id) {
+        try {
+            await chrome.tabs.update(tab.id, { active: true });
+            if (tab.windowId) {
+                await chrome.windows.update(tab.windowId, { focused: true });
             }
         }
-    });
+        catch (e) {
+            console.log('[Background] Could not focus tab:', e);
+        }
+    }
 }
 /**
  * Check the Prolific tab status periodically
  */
-function checkProlificTab() {
-    return __awaiter(this, void 0, void 0, function* () {
-        const tab = yield findProlificTab();
-        if (!tab)
-            return;
-        // If the tab title indicates studies available, trigger notification
-        if (tab.title) {
-            const currentNumber = getNumberFromTitle(tab.title);
-            if (currentNumber > 0) {
-                console.log(`[Background] Alarm check: ${currentNumber} studies detected from title`);
-                yield handleStudiesDetected({ count: currentNumber, source: 'alarm' });
-            }
+async function checkProlificTab() {
+    const tab = await findProlificTab();
+    if (!tab)
+        return;
+    // If the tab title indicates studies available, trigger notification
+    if (tab.title) {
+        const currentNumber = getNumberFromTitle(tab.title);
+        if (currentNumber > 0) {
+            console.log(`[Background] Alarm check: ${currentNumber} studies detected from title`);
+            await handleStudiesDetected({ count: currentNumber, source: 'alarm' });
         }
-    });
+    }
 }
 /**
  * Send a message to all content scripts on Prolific tabs
  */
-function broadcastToContentScripts(message) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const tabs = yield chrome.tabs.query({ url: "https://app.prolific.com/*" });
-        for (const tab of tabs) {
-            if (tab.id) {
-                try {
-                    yield chrome.tabs.sendMessage(tab.id, message);
-                }
-                catch (e) {
-                    // Content script may not be ready
-                }
+async function broadcastToContentScripts(message) {
+    const tabs = await chrome.tabs.query({ url: "https://app.prolific.com/*" });
+    for (const tab of tabs) {
+        if (tab.id) {
+            try {
+                await chrome.tabs.sendMessage(tab.id, message);
+            }
+            catch (e) {
+                // Content script may not be ready
             }
         }
-    });
+    }
 }
 /**
  * Trigger content script to check for studies immediately
  */
-function triggerContentScriptCheck() {
-    return __awaiter(this, void 0, void 0, function* () {
-        yield broadcastToContentScripts({
-            target: 'content-script',
-            type: 'force-check',
-        });
+async function triggerContentScriptCheck() {
+    await broadcastToContentScripts({
+        target: 'content-script',
+        type: 'force-check',
     });
 }
 // ======================== TAB LISTENER (Original + Enhanced) ========================
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     // 1. Dynamic Script Injection for External Study Sites
-    if (changeInfo.status === 'complete' && ((_a = tab.url) === null || _a === void 0 ? void 0 : _a.includes('PROLIFIC_PID='))) {
+    if (changeInfo.status === 'complete' && tab.url?.includes('PROLIFIC_PID=')) {
         // Inject Scraper
         chrome.scripting.executeScript({
             target: { tabId: tabId },
@@ -380,27 +345,27 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => __awaiter(void 0, 
         }
     }
     // 2. Prolific Title Monitoring
-    previousTitle = yield getValueFromStorage(PROLIFIC_TITLE, 'Prolific');
+    previousTitle = await getValueFromStorage(PROLIFIC_TITLE, 'Prolific');
     if (tab.url && tab.url.includes('https://app.prolific.com/') && changeInfo.title && changeInfo.title !== previousTitle && tab.status === 'complete') {
         const previousNumber = getNumberFromTitle(previousTitle);
         const currentNumber = getNumberFromTitle(changeInfo.title);
-        yield chrome.storage.sync.set({ [PROLIFIC_TITLE]: changeInfo.title });
+        await chrome.storage.sync.set({ [PROLIFIC_TITLE]: changeInfo.title });
         if (changeInfo.title.trim() !== 'Prolific' && currentNumber > previousNumber) {
-            shouldSendNotification = yield getValueFromStorage(SHOW_NOTIFICATION, true);
+            shouldSendNotification = await getValueFromStorage(SHOW_NOTIFICATION, true);
             if (shouldSendNotification) {
                 sendNotification();
             }
-            shouldPlayAudio = yield getValueFromStorage(AUDIO_ACTIVE, true);
+            shouldPlayAudio = await getValueFromStorage(AUDIO_ACTIVE, true);
             if (shouldPlayAudio) {
-                audio = yield getValueFromStorage(AUDIO, 'alert1.mp3');
-                volume = (yield getValueFromStorage(VOLUME, 100)) / 100;
-                yield playAudio(audio, volume);
+                audio = await getValueFromStorage(AUDIO, 'alert1.mp3');
+                volume = await getValueFromStorage(VOLUME, 100) / 100;
+                await playAudio(audio, volume);
             }
-            yield updateCounterAndBadge(currentNumber - previousNumber);
+            await updateCounterAndBadge(currentNumber - previousNumber);
             // NEW: Also trigger content script to try auto-reserving
             if (tab.id) {
                 try {
-                    yield chrome.tabs.sendMessage(tab.id, {
+                    await chrome.tabs.sendMessage(tab.id, {
                         target: 'content-script',
                         type: 'try-reserve',
                     });
@@ -411,20 +376,18 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => __awaiter(void 0, 
             }
         }
     }
-}));
+});
 // ======================== AUDIO ========================
-function playAudio() {
-    return __awaiter(this, arguments, void 0, function* (audio = 'alert1.mp3', volume = 1.0) {
-        yield setupOffscreenDocument('audio/audio.html');
-        const req = {
-            audio: audio,
-            volume: volume
-        };
-        yield chrome.runtime.sendMessage({
-            type: 'play-sound',
-            target: 'offscreen-doc',
-            data: req
-        });
+async function playAudio(audio = 'alert1.mp3', volume = 1.0) {
+    await setupOffscreenDocument('audio/audio.html');
+    const req = {
+        audio: audio,
+        volume: volume
+    };
+    await chrome.runtime.sendMessage({
+        type: 'play-sound',
+        target: 'offscreen-doc',
+        data: req
     });
 }
 // ======================== NOTIFICATIONS ========================
@@ -438,110 +401,99 @@ function sendNotification(customMessage) {
     });
 }
 // ======================== BADGE ========================
-function updateBadge(counter) {
-    return __awaiter(this, void 0, void 0, function* () {
-        yield chrome.action.setBadgeText({ text: counter.toString() });
-        yield chrome.action.setBadgeBackgroundColor({ color: "#9dec14" });
-        setTimeout(() => __awaiter(this, void 0, void 0, function* () {
-            yield chrome.action.setBadgeText({ text: '' });
-        }), 20000);
-    });
+async function updateBadge(counter) {
+    await chrome.action.setBadgeText({ text: counter.toString() });
+    await chrome.action.setBadgeBackgroundColor({ color: "#9dec14" });
+    setTimeout(async () => {
+        await chrome.action.setBadgeText({ text: '' });
+    }, 20000);
 }
-function updateCounterAndBadge() {
-    return __awaiter(this, arguments, void 0, function* (count = 1) {
-        let counter = (yield getValueFromStorage(COUNTER, 0)) + count;
-        yield chrome.storage.sync.set({ [COUNTER]: counter });
-        yield updateBadge(count);
-    });
+async function updateCounterAndBadge(count = 1) {
+    let counter = await getValueFromStorage(COUNTER, 0) + count;
+    await chrome.storage.sync.set({ [COUNTER]: counter });
+    await updateBadge(count);
 }
 // ======================== STORAGE ========================
-function setInitialValues() {
-    return __awaiter(this, void 0, void 0, function* () {
-        yield Promise.all([
-            chrome.storage.sync.set({ [AUDIO_ACTIVE]: true }),
-            chrome.storage.sync.set({ [AUDIO]: "alert1.mp3" }),
-            chrome.storage.sync.set({ [SHOW_NOTIFICATION]: true }),
-            chrome.storage.sync.set({ [VOLUME]: 100 }),
-            chrome.storage.sync.set({ [AUTO_RESERVE]: true }),
-        ]);
-    });
+async function setInitialValues() {
+    await Promise.all([
+        chrome.storage.sync.set({ [AUDIO_ACTIVE]: true }),
+        chrome.storage.sync.set({ [AUDIO]: "alert1.mp3" }),
+        chrome.storage.sync.set({ [SHOW_NOTIFICATION]: true }),
+        chrome.storage.sync.set({ [VOLUME]: 100 }),
+        chrome.storage.sync.set({ [AUTO_RESERVE]: true }),
+    ]);
 }
 // ======================== OFFSCREEN DOCUMENT ========================
-function setupOffscreenDocument(path) {
-    return __awaiter(this, void 0, void 0, function* () {
-        try {
-            const offscreenUrl = chrome.runtime.getURL(path);
-            // Use string literals for types to avoid alias issues
-            const existingContexts = yield chrome.runtime.getContexts({
-                contextTypes: ['OFFSCREEN_DOCUMENT'],
-                documentUrls: [offscreenUrl]
-            });
-            if (existingContexts.length > 0) {
-                return;
-            }
-            if (creating) {
-                yield creating;
-                return;
-            }
-            creating = chrome.offscreen.createDocument({
-                url: path,
-                reasons: ['AUDIO_PLAYBACK'],
-                justification: 'Audio playback for study notifications'
-            });
-            yield creating;
-            creating = null;
-            console.log('[Background] Offscreen document created');
+async function setupOffscreenDocument(path) {
+    try {
+        const offscreenUrl = chrome.runtime.getURL(path);
+        // Use string literals for types to avoid alias issues
+        const existingContexts = await chrome.runtime.getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT'],
+            documentUrls: [offscreenUrl]
+        });
+        if (existingContexts.length > 0) {
+            return;
         }
-        catch (error) {
-            console.error('[Background] Failed to create offscreen document:', error);
-            creating = null;
-            // Fallback or handle error
+        if (creating) {
+            await creating;
+            return;
         }
-    });
+        creating = chrome.offscreen.createDocument({
+            url: path,
+            reasons: ['AUDIO_PLAYBACK'],
+            justification: 'Audio playback for study notifications'
+        });
+        await creating;
+        creating = null;
+        console.log('[Background] Offscreen document created');
+    }
+    catch (error) {
+        console.error('[Background] Failed to create offscreen document:', error);
+        creating = null;
+        // Fallback or handle error
+    }
 }
 // ======================== AI FUNCTIONS ========================
-function queryAI(userPrompt, systemPrompt) {
-    return __awaiter(this, void 0, void 0, function* () {
-        var _a;
-        const apiKey = yield getValueFromStorage('aiApiKey', '');
-        const baseUrl = yield getValueFromStorage('aiBaseUrl', 'https://api.openai.com/v1');
-        const model = yield getValueFromStorage('aiModel', 'gpt-4o-mini');
-        if (!apiKey)
-            return 'NO_API_KEY';
-        const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
-        // 15-second timeout for AI requests
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
-        try {
-            const response = yield fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${apiKey}`
-                },
-                body: JSON.stringify({
-                    model: model,
-                    messages: [
-                        { role: "system", content: systemPrompt },
-                        { role: "user", content: userPrompt }
-                    ],
-                    temperature: 0.1
-                }),
-                signal: controller.signal
-            });
-            clearTimeout(timeoutId);
-            if (!response.ok) {
-                const errorData = yield response.json();
-                throw new Error(`AI API Error: ${((_a = errorData.error) === null || _a === void 0 ? void 0 : _a.message) || response.statusText}`);
-            }
-            const data = yield response.json();
-            return data.choices[0].message.content.trim();
+async function queryAI(userPrompt, systemPrompt) {
+    const apiKey = await getValueFromStorage('aiApiKey', '');
+    const baseUrl = await getValueFromStorage('aiBaseUrl', 'https://api.openai.com/v1');
+    const model = await getValueFromStorage('aiModel', 'gpt-4o-mini');
+    if (!apiKey)
+        return 'NO_API_KEY';
+    const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+    // 15-second timeout for AI requests
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: model,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt }
+                ],
+                temperature: 0.1
+            }),
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(`AI API Error: ${errorData.error?.message || response.statusText}`);
         }
-        catch (error) {
-            clearTimeout(timeoutId);
-            throw error;
-        }
-    });
+        const data = await response.json();
+        return data.choices[0].message.content.trim();
+    }
+    catch (error) {
+        clearTimeout(timeoutId);
+        throw error;
+    }
 }
 // Start hydration immediately on service worker wake-up
 hydrateCachedSettings();

@@ -1,4 +1,3 @@
-"use strict";
 /**
  * WhatsApp Web Monitor for Prolific Study Links
  * ================================================
@@ -389,7 +388,6 @@ function waStartPolling() {
 // ======================== MESSAGE LISTENER ========================
 function setupMessageListener() {
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-        var _a, _b;
         if (message.target !== 'whatsapp-monitor')
             return;
         switch (message.type) {
@@ -402,7 +400,7 @@ function setupMessageListener() {
                 });
                 break;
             case 'toggle-wa-monitor':
-                waIsEnabled = (_b = (_a = message.data) === null || _a === void 0 ? void 0 : _a.enabled) !== null && _b !== void 0 ? _b : !waIsEnabled;
+                waIsEnabled = message.data?.enabled ?? !waIsEnabled;
                 waLog(`Monitor ${waIsEnabled ? 'ENABLED ✅' : 'DISABLED ❌'}`);
                 sendResponse({ enabled: waIsEnabled });
                 break;

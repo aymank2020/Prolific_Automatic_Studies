@@ -1,4 +1,3 @@
-"use strict";
 /**
  * Prolific Study Scraper
  * Runs on third-party study sites to find the completion code early.

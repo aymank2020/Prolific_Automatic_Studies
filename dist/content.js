@@ -1,4 +1,3 @@
-"use strict";
 /**
  * Prolific Auto-Reserve Content Script v2
  * Targets: https://app.prolific.com/*
@@ -11,15 +10,6 @@
  * - Nav: Studies | Submissions | About you | Messages
  */
 // @ts-ignore: Isolated scope
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 const CONFIG = {
     // "Take part in this study" is the EXACT button text from screenshots
     RESERVE_BUTTON_TEXT: [
@@ -76,8 +66,7 @@ function isTargetPage() {
 }
 // ======================== 404 & ERROR HANDLING ========================
 function check404AndRedirect() {
-    var _a;
-    const bodyText = ((_a = document.body) === null || _a === void 0 ? void 0 : _a.textContent) || '';
+    const bodyText = document.body?.textContent || '';
     if (bodyText.includes('404') && bodyText.includes('Page Not Found')) {
         const isSpecificStudy = getStudyIdFromUrl() !== null;
         if (isSpecificStudy) {
@@ -93,8 +82,7 @@ function check404AndRedirect() {
     return false;
 }
 function checkStudyFull() {
-    var _a;
-    const bodyText = (((_a = document.body) === null || _a === void 0 ? void 0 : _a.textContent) || '').toLowerCase();
+    const bodyText = (document.body?.textContent || '').toLowerCase();
     for (const text of CONFIG.STUDY_FULL_TEXT) {
         if (bodyText.includes(text)) {
             const isSpecificStudy = getStudyIdFromUrl() !== null;
@@ -157,7 +145,6 @@ function isVisible(el) {
 }
 // ======================== AUTO-RESERVE ========================
 function tryAutoReserve() {
-    var _a;
     if (!isEnabled)
         return 0;
     const t0 = Date.now();
@@ -169,7 +156,7 @@ function tryAutoReserve() {
         const id = getStudyIdFromUrl() || getStudyIdFromElement(btn) || `btn-${clicked}`;
         if (reservedStudyIds.has(id))
             continue;
-        log(`🎯 Clicking reserve button: "${(_a = btn.textContent) === null || _a === void 0 ? void 0 : _a.trim()}"`);
+        log(`🎯 Clicking reserve button: "${btn.textContent?.trim()}"`);
         try {
             // Multiple click methods for React compatibility
             btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
@@ -225,10 +212,9 @@ function getStudyIdFromUrl() {
     return m ? m[1] : null;
 }
 function getStudyIdFromElement(el) {
-    var _a;
     const link = el.closest('a[href*="/studies/"]') || el.querySelector('a[href*="/studies/"]');
     if (link) {
-        const match = (_a = link.getAttribute('href')) === null || _a === void 0 ? void 0 : _a.match(/\/studies\/([a-f0-9]+)/i);
+        const match = link.getAttribute('href')?.match(/\/studies\/([a-f0-9]+)/i);
         return match ? match[1] : null;
     }
     return null;
@@ -339,36 +325,34 @@ function setupObserver() {
 // ======================== API INTERCEPTION ========================
 function interceptFetch() {
     const orig = window.fetch;
-    window.fetch = function (...args) {
-        return __awaiter(this, void 0, void 0, function* () {
-            const url = typeof args[0] === 'string' ? args[0] : (args[0] instanceof Request ? args[0].url : '');
-            const response = yield orig.apply(this, args);
-            if (url.includes(CONFIG.API_PATTERN) && url.includes('stud')) {
-                try {
-                    const clone = response.clone();
-                    const data = yield clone.json();
-                    const studies = (data === null || data === void 0 ? void 0 : data.results) || (Array.isArray(data) ? data : null);
-                    if ((studies === null || studies === void 0 ? void 0 : studies.length) > 0) {
-                        log(`📡 API: ${studies.length} studies from fetch`);
-                        let newCount = 0;
-                        for (const s of studies) {
-                            const id = s.id || s.study_id;
-                            if (id) {
-                                if (!knownStudyIds.has(id)) {
-                                    knownStudyIds.add(id);
-                                    newCount++;
-                                }
-                                knownStudiesData.set(id, s);
+    window.fetch = async function (...args) {
+        const url = typeof args[0] === 'string' ? args[0] : (args[0] instanceof Request ? args[0].url : '');
+        const response = await orig.apply(this, args);
+        if (url.includes(CONFIG.API_PATTERN) && url.includes('stud')) {
+            try {
+                const clone = response.clone();
+                const data = await clone.json();
+                const studies = data?.results || (Array.isArray(data) ? data : null);
+                if (studies?.length > 0) {
+                    log(`📡 API: ${studies.length} studies from fetch`);
+                    let newCount = 0;
+                    for (const s of studies) {
+                        const id = s.id || s.study_id;
+                        if (id) {
+                            if (!knownStudyIds.has(id)) {
+                                knownStudyIds.add(id);
+                                newCount++;
                             }
+                            knownStudiesData.set(id, s);
                         }
-                        if (newCount > 0 && isTargetPage())
-                            onStudyDetected('api-fetch');
                     }
+                    if (newCount > 0 && isTargetPage())
+                        onStudyDetected('api-fetch');
                 }
-                catch (e) { }
             }
-            return response;
-        });
+            catch (e) { }
+        }
+        return response;
     };
     log('🔌 Fetch interceptor installed');
 }
@@ -385,8 +369,8 @@ function interceptXHR() {
             this.addEventListener('load', function () {
                 try {
                     const data = JSON.parse(this.responseText);
-                    const studies = (data === null || data === void 0 ? void 0 : data.results) || (Array.isArray(data) ? data : null);
-                    if ((studies === null || studies === void 0 ? void 0 : studies.length) > 0) {
+                    const studies = data?.results || (Array.isArray(data) ? data : null);
+                    if (studies?.length > 0) {
                         log(`📡 API: ${studies.length} studies from XHR`);
                         let n = 0;
                         for (const s of studies) {
@@ -470,12 +454,11 @@ function notifyBg(type, data) {
 }
 function setupMessages() {
     chrome.runtime.onMessage.addListener((msg, _s, respond) => {
-        var _a, _b;
         if (msg.target !== 'content-script')
             return;
         switch (msg.type) {
             case 'toggle-auto-reserve':
-                isEnabled = (_b = (_a = msg.data) === null || _a === void 0 ? void 0 : _a.enabled) !== null && _b !== void 0 ? _b : !isEnabled;
+                isEnabled = msg.data?.enabled ?? !isEnabled;
                 respond({ enabled: isEnabled });
                 break;
             case 'get-status':
