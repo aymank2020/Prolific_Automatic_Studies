@@ -84,9 +84,9 @@ chrome.runtime.onStartup.addListener(async function(): Promise<void> {
 
 // ======================== ALARMS ========================
 function setupAlarms(): void {
-    // Regular poll every 30 seconds
+    // Regular poll every 60 seconds (increased to avoid rate limits)
     chrome.alarms.create(POLL_ALARM_NAME, {
-        periodInMinutes: 0.5, // 30 seconds
+        periodInMinutes: 1.0, 
     });
 }
 
@@ -219,7 +219,24 @@ async function handleMessages(message: { target: string; type: any; data?: any; 
             }
             break;
 
-        // AI Auto-Solver: Solve Question
+        // Rate Limit Detection
+        case 'rate-limit-detected':
+            console.warn('[Background] RATE LIMIT DETECTED! Pausing automation...');
+            await chrome.storage.sync.set({[AUTO_RESERVE]: false});
+            chrome.notifications.create({
+                type: 'basic',
+                iconUrl: chrome.runtime.getURL(ICON_URL),
+                title: '⚠️ Prolific Rate Limit',
+                message: 'Your account is being rate limited. Automation paused for 30 minutes to protect your account.',
+                priority: 2
+            });
+            // Stop alarm for 30 minutes
+            chrome.alarms.clear(POLL_ALARM_NAME);
+            setTimeout(() => {
+                setupAlarms();
+            }, 30 * 60 * 1000);
+            break;
+
         case 'solve-question':
             try {
                 const answer = await queryAI(message.data.userPrompt, message.data.systemPrompt);

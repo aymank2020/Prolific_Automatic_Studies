@@ -44,10 +44,16 @@ const CONFIG = {
         'study has been paused',
         'study has ended',
     ],
-    POLL_INTERVAL: 500,
-    FAST_POLL_INTERVAL: 50,
-    FAST_POLL_DURATION: 5000,
-    MUTATION_DEBOUNCE: 10,
+    RATE_LIMIT_TEXT: [
+        '429',
+        'too many requests',
+        'unusually high activity',
+        'access to studies have been limited',
+    ],
+    POLL_INTERVAL: 2000,
+    FAST_POLL_INTERVAL: 800,
+    FAST_POLL_DURATION: 8000,
+    MUTATION_DEBOUNCE: 1000,
     API_PATTERN: 'internal-api.prolific.com/api/v1',
     LOG_PREFIX: '🚀 [Prolific Auto-Reserve]',
 };
@@ -104,6 +110,19 @@ function checkStudyFull(): boolean {
                     window.location.href = 'https://app.prolific.com/studies';
                 }, 1500);
             }
+            return true;
+        }
+    }
+    return false;
+function checkRateLimit(): boolean {
+    const pageText = document.body.innerText.toLowerCase();
+    for (const pattern of CONFIG.RATE_LIMIT_TEXT) {
+        if (pageText.includes(pattern)) {
+            log('🚨 RATE LIMIT DETECTED! Pausing all automation...');
+            notifyBg('rate-limit-detected');
+            isEnabled = false;
+            if (observer) observer.disconnect();
+            if (fastPollTimer) clearInterval(fastPollTimer);
             return true;
         }
     }
@@ -271,6 +290,7 @@ function extractStudyDataFromCard(card: Element) {
 
 function onStudyDetected(source: string) {
     if (!isTargetPage()) return;
+    if (checkRateLimit()) return;
     
     log(`🔔 Study detected via ${source}!`);
     if (checkStudyFull()) return;
@@ -567,6 +587,7 @@ function init() {
 
     // Initial check after page settles
     setTimeout(() => {
+        if (checkRateLimit()) return;
         if (check404AndRedirect()) return;
         checkStudyFull();
         const cards = findStudyCards();
