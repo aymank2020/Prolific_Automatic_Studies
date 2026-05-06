@@ -323,6 +323,10 @@ function onStudyDetected(source) {
     if (checkRateLimit())
         return;
     log(`🔔 Study detected via ${source}!`);
+    // Priority 1: Check for Limited Capacity (Smart Refresh)
+    if (handleLimitedCapacity())
+        return;
+    // Priority 2: Check for Fatal Full errors
     if (checkStudyFull())
         return;
     // Try to extract data for ALL current study cards for history
@@ -662,7 +666,11 @@ function init() {
             return;
         if (check404AndRedirect())
             return;
-        checkStudyFull();
+        // Priority 1: Handle Limited Capacity with Smart Refresh
+        if (handleLimitedCapacity())
+            return;
+        if (checkStudyFull())
+            return;
         const cards = findStudyCards();
         lastStudyCount = cards.length;
         log(`📊 Initial: ${cards.length} cards, URL: ${location.href}`);
