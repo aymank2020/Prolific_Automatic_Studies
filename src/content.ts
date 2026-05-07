@@ -42,7 +42,9 @@ const CONFIG = {
         'no places available',
         'no more places',
         'study has been paused',
+        'researcher has paused',
         'study has ended',
+        'no longer active',
     ],
     LIMITED_CAPACITY_TEXT: [
         'only allows',
