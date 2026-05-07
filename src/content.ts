@@ -125,9 +125,14 @@ function checkStudyFull(): boolean {
 
 let isAutoRefreshing = false;
 function handleLimitedCapacity(): boolean {
-    const bodyText = (document.body?.textContent || '').toLowerCase();
+    const bodyText = (document.body?.innerText || '').toLowerCase();
     
-    if (bodyText.includes('submissions at a time') && bodyText.includes('currently full')) {
+    const isLimited = 
+        (bodyText.includes('submissions at a time') && bodyText.includes('currently full')) ||
+        (bodyText.includes('only allows') && bodyText.includes('at a time')) ||
+        (bodyText.includes('try again soon') && bodyText.includes('currently full'));
+
+    if (isLimited) {
         if (isAutoRefreshing) return true;
         
         log('⏳ LIMITED CAPACITY! Starting smart-refresh cycle...');
@@ -571,7 +576,10 @@ function startPolling() {
     const runPoll = () => {
         if (checkRateLimit() || check404AndRedirect()) return;
         
+        // Handle modals and capacity errors first
         handleModals();
+        if (handleLimitedCapacity()) return;
+        if (checkStudyFull()) return;
 
         const cards = findStudyCards();
         if (cards.length > lastStudyCount) {
