@@ -182,6 +182,15 @@ async function setupAISettings(): Promise<void> {
                 (g as HTMLElement).style.display = "none";
             }
         });
+
+        // Set default base URL for OpenCode
+        if (provider === "opencode" && (!aiBaseUrl.value || aiBaseUrl.value.includes("openai.com") || aiBaseUrl.value.includes("/go/"))) {
+            aiBaseUrl.value = "https://opencode.ai/zen/v1";
+            chrome.storage.sync.set({ ["aiBaseUrl"]: aiBaseUrl.value });
+        } else if (provider === "opencode-go" && (!aiBaseUrl.value || aiBaseUrl.value.includes("openai.com") || aiBaseUrl.value.includes("/zen/"))) {
+            aiBaseUrl.value = "https://opencode.ai/go/v1";
+            chrome.storage.sync.set({ ["aiBaseUrl"]: aiBaseUrl.value });
+        }
         
         // Auto-select first visible option if current is hidden
         const selected = aiModel.selectedOptions[0];

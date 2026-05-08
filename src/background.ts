@@ -417,7 +417,15 @@ async function focusProlificTab(): Promise<void> {
  */
 async function checkProlificTab(): Promise<void> {
     const tab = await findProlificTab();
-    if (!tab) return;
+    if (!tab) {
+        // ERROR HANDLING: If no tab is found, and automation should be active, open one!
+        const autoReserve = await getValueFromStorage(AUTO_RESERVE, true);
+        if (autoReserve) {
+            console.log('[Background] No Prolific tab found, opening one automatically...');
+            await chrome.tabs.create({url: "https://app.prolific.com/studies", active: false});
+        }
+        return;
+    }
 
     // If the tab title indicates studies available, trigger notification
     if (tab.title) {
@@ -617,7 +625,7 @@ async function queryAI(userPrompt: string, systemPrompt: string): Promise<string
         let headers: Record<string, string> = { 'Content-Type': 'application/json' };
         let body: any = {};
 
-        if (provider === 'openai' || provider === 'openrouter' || provider === 'custom') {
+        if (provider === 'openai' || provider === 'openrouter' || provider === 'custom' || provider === 'opencode' || provider === 'opencode-go') {
             url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
             headers['Authorization'] = `Bearer ${apiKey}`;
             body = {
