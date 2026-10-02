@@ -36,6 +36,9 @@ async function hydrateCachedSettings() {
 const API_BASE = 'https://internal-api.prolific.com/api/v1';
 const POLL_ALARM_NAME = 'prolific-api-poll';
 const FAST_POLL_ALARM_NAME = 'prolific-fast-poll';
+const COOLDOWN_ALARM_NAME = 'prolific-cooldown-expired';
+const COOLDOWN_UNTIL = 'prolificCooldownUntil';
+let historyWriteQueue = Promise.resolve();
 // ======================== MESSAGE HANDLERS ========================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleMessages(message, sender, sendResponse);
@@ -71,7 +74,13 @@ chrome.runtime.onStartup.addListener(async function () {
     await hydrateCachedSettings();
 });
 // ======================== ALARMS ========================
-function setupAlarms() {
+async function setupAlarms() {
+    const state = await chrome.storage.local.get(COOLDOWN_UNTIL);
+    if ((state[COOLDOWN_UNTIL] || 0) > Date.now()) {
+        await chrome.alarms.clear(POLL_ALARM_NAME);
+        await chrome.alarms.create(COOLDOWN_ALARM_NAME, { when: state[COOLDOWN_UNTIL] });
+        return;
+    }
     // Random interval between 2 and 4 minutes to look more human
     const delay = 2 + Math.random() * 2;
     chrome.alarms.create(POLL_ALARM_NAME, {
@@ -80,7 +89,16 @@ function setupAlarms() {
     console.log(`[Background] Next human-like poll in ${delay.toFixed(2)} minutes`);
 }
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name === COOLDOWN_ALARM_NAME) {
+        await setupAlarms();
+        return;
+    }
     if (alarm.name === POLL_ALARM_NAME) {
+        const state = await chrome.storage.local.get(COOLDOWN_UNTIL);
+        if ((state[COOLDOWN_UNTIL] || 0) > Date.now()) {
+            await setupAlarms();
+            return;
+        }
         await checkProlificTab();
         // Reschedule for next random time
         setupAlarms();
@@ -141,9 +159,6 @@ async function handleMessages(message, sender, sendResponse) {
         case 'study-reserved':
             console.log('[Background] Study reserved:', message.data);
             await handleStudyReserved(message.data);
-            if (message.data?.count) {
-                await addToHistory(message.data);
-            }
             break;
         // New: Toggle auto-reserve
         case 'toggle-auto-reserve':
@@ -206,11 +221,10 @@ async function handleMessages(message, sender, sendResponse) {
                 message: 'Your account is being rate limited. Automation paused for 30 minutes to protect your account.',
                 priority: 2
             });
-            // Stop alarm for 30 minutes
-            chrome.alarms.clear(POLL_ALARM_NAME);
-            setTimeout(() => {
-                setupAlarms();
-            }, 30 * 60 * 1000);
+            // Persist the pause across service-worker suspension and browser restarts.
+            await chrome.storage.local.set({ [COOLDOWN_UNTIL]: Date.now() + 30 * 60 * 1000 });
+            await chrome.alarms.clear(FAST_POLL_ALARM_NAME);
+            await setupAlarms();
             break;
         case 'solve-question':
             try {
@@ -232,9 +246,18 @@ async function handleMessages(message, sender, sendResponse) {
             break;
     }
 }
-async function addToHistory(data) {
+function queueHistoryWrite(operation) {
+    const pending = historyWriteQueue.then(operation);
+    historyWriteQueue = pending.catch(() => undefined);
+    return pending;
+}
+function addToHistory(data) {
+    return queueHistoryWrite(() => appendToHistory(data));
+}
+async function appendToHistory(data) {
     try {
-        const history = await getValueFromStorage('studyHistory', []);
+        const stored = await chrome.storage.local.get('studyHistory');
+        const history = Array.isArray(stored.studyHistory) ? stored.studyHistory : [];
         let studyInfo = data.study || {};
         const studyId = data.id || studyInfo.id || 'unknown';
         // Generate Prolific URL
@@ -263,9 +286,13 @@ async function addToHistory(data) {
         console.error('[Background] Error adding to history:', e);
     }
 }
-async function updateHistoryWithCode(code, url) {
+function updateHistoryWithCode(code, url) {
+    return queueHistoryWrite(() => persistHistoryCode(code, url));
+}
+async function persistHistoryCode(code, url) {
     try {
-        const history = await getValueFromStorage('studyHistory', []);
+        const stored = await chrome.storage.local.get('studyHistory');
+        const history = Array.isArray(stored.studyHistory) ? stored.studyHistory : [];
         let updated = false;
         for (let entry of history) {
             const isRecent = (Date.now() - entry.timestamp) < 2 * 60 * 60 * 1000;
@@ -407,6 +434,9 @@ async function broadcastToContentScripts(message) {
  * Trigger content script to check for studies immediately
  */
 async function triggerContentScriptCheck() {
+    const state = await chrome.storage.local.get(COOLDOWN_UNTIL);
+    if ((state[COOLDOWN_UNTIL] || 0) > Date.now())
+        return;
     await broadcastToContentScripts({
         target: 'content-script',
         type: 'force-check',
@@ -614,4 +644,5 @@ async function queryAI(userPrompt, systemPrompt) {
 }
 // Start hydration immediately on service worker wake-up
 hydrateCachedSettings();
+setupAlarms();
 // End of Background Script
